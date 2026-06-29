@@ -4,6 +4,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { search, meshNetworks } from '$lib/api.js';
+  import { focusSearchInput } from '$lib/search.js';
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NetworkPill from '$lib/NetworkPill.svelte';
   import { TYPE_LABEL, fmtAgo, shortKey, fmtCoords } from '$lib/format.js';
@@ -27,6 +28,28 @@
 
   let inflight; // AbortController of the current request
   let searchInput;
+  let focusNonce = 0;
+
+  function focusSearchBox() {
+    requestAnimationFrame(() => searchInput?.focus());
+  }
+
+  // ⌘K / Ctrl+K on the homepage, or arriving from another page via ?focus=search.
+  $effect(() => {
+    const n = $focusSearchInput;
+    if (n !== focusNonce) {
+      focusNonce = n;
+      if (n > 0) focusSearchBox();
+    }
+  });
+
+  $effect(() => {
+    if ($page.url.searchParams.get('focus') !== 'search') return;
+    focusSearchBox();
+    const q = $page.url.searchParams.get('q') ?? '';
+    const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+    goto(`${base}/${qs}`, { replaceState: true, keepFocus: true, noScroll: true });
+  });
 
   const hasQuery = $derived(q.trim() !== '');
   const activeNode = $derived(activeIndex >= 0 ? results[activeIndex] : null);
@@ -120,7 +143,7 @@
 </svelte:head>
 
 <section
-  class="w-full mx-auto max-w-3xl px-4 transition-all"
+  class="w-full mx-auto max-w-3xl min-w-0 px-4 transition-all"
   class:pt-[18vh]={!hasQuery}
   class:pt-10={hasQuery}
 >
@@ -185,8 +208,23 @@
               >
                 <NodeIcon type={n.type} size={20} class="shrink-0 text-dim" />
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate font-medium">{n.name || '(unnamed)'}</span>
+                  <span class="flex items-center gap-1.5">
+                    <span class="truncate font-medium">{n.name || '(unnamed)'}</span>
+                    {#if n.source === 'map'}
+                      <span
+                        class="shrink-0 rounded-full border border-accent2/40 px-1.5 py-px text-[0.6rem] uppercase tracking-wide text-accent2"
+                        title="Only on map.meshcore.io — not yet observed by our analyzers"
+                      >
+                        map
+                      </span>
+                    {/if}
+                  </span>
                   <span class="block truncate text-xs text-muted font-mono">{shortKey(n.pubkey)}</span>
+                  <span class="mt-1 block text-xs text-dim sm:hidden">
+                    <span class="capitalize">{TYPE_LABEL[n.type]}</span>
+                    {#if n.hasGps}<span> · {fmtCoords(n.lat, n.lon)}</span>{/if}
+                    <span> · {fmtAgo(n.lastAdvertAt)}</span>
+                  </span>
                   {#if n.networks?.length}
                     <span class="mt-1 flex flex-wrap gap-1">
                       {#each n.networks as net}

@@ -103,6 +103,40 @@ export function nodeNetworkStats(pubkey, signal) {
   );
 }
 
+/**
+ * One node's daily advert activity for a contribution-style heatmap.
+ * @param {string} pubkey hex public key
+ * @param {object} [opts]
+ * @param {number} [opts.days]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{node:string,days:number,from:number,to:number,activity:{day:number,adverts:number}[]}>}
+ */
+export function nodeAdvertActivity(pubkey, { days } = {}, signal) {
+  const sp = new URLSearchParams();
+  if (days) sp.set('days', String(days));
+  const qs = sp.toString();
+  const url = `${API_BASE}/api/nodes/${encodeURIComponent(pubkey)}/activity${qs ? `?${qs}` : ''}`;
+  return fetch(url, { signal }).then((r) => {
+    if (!r.ok) throw new Error(`activity ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * One node's captured map.meshcore.io publish history, newest publish first.
+ * Each entry is a distinct snapshot of the node's directory metadata we have
+ * mirrored over time. Empty when the node has never appeared on the map.
+ * @param {string} pubkey hex public key
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{node:string,publishes:any[]}>}
+ */
+export function nodeMapPublishes(pubkey, signal) {
+  return fetch(`${API_BASE}/api/nodes/${encodeURIComponent(pubkey)}/map`, { signal }).then((r) => {
+    if (!r.ok) throw new Error(`map ${r.status}`);
+    return r.json();
+  });
+}
+
 // Origin of the MeshCore Ninja catalog that publishes networks.json (network
 // metadata). Overridable for local testing.
 const CATALOG_ORIGIN = (import.meta.env?.VITE_CATALOG_ORIGIN || 'https://meshcore.ninja').replace(

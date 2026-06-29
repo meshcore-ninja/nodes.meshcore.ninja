@@ -22,6 +22,11 @@
     return Number.isFinite(a) && Number.isFinite(b);
   }
 
+  function linkHasLocation(link) {
+    const n = link?.neighbor;
+    return !!n?.hasGps && validCoord(n.lat, n.lon);
+  }
+
   function setTiles() {
     if (!map) return;
     const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -46,10 +51,7 @@
       pts.push([lat, lon]);
       // Line width is relative to packet count across this node's links, so the
       // busiest neighbour reads widest (like the main map).
-      const located = links.filter((l) => {
-        const n = l.neighbor;
-        return n?.hasGps && validCoord(n.lat, n.lon);
-      });
+      const located = links.filter(linkHasLocation);
       const maxPkt = located.reduce((m, l) => Math.max(m, l.packetCount || 0), 0) || 1;
 
       for (const l of located) {
@@ -129,8 +131,40 @@
   {#if !hasLocation}
     <div class="absolute inset-0 z-[500] flex items-center justify-center pointer-events-none">
       <span class="rounded-md border border-edge bg-bg/80 px-3 py-1 text-xs text-dim">
-        No GPS location
+        This node doesn’t send coordinates
       </span>
     </div>
   {/if}
 </div>
+
+<style>
+  :global(.leaflet-control-zoom) {
+    border: 1px solid var(--color-edge) !important;
+    border-radius: 0.5rem !important;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+  }
+
+  :global(.leaflet-control-zoom a) {
+    background: var(--color-elev) !important;
+    border-color: var(--color-edge) !important;
+    color: var(--color-ink) !important;
+  }
+
+  :global(.leaflet-control-zoom a:hover),
+  :global(.leaflet-control-zoom a:focus) {
+    background: var(--color-elev2) !important;
+    color: var(--color-accent) !important;
+  }
+
+  :global(.leaflet-control-attribution) {
+    background: color-mix(in srgb, var(--color-bg) 86%, transparent) !important;
+    border: 1px solid var(--color-edge);
+    border-radius: 0.375rem 0 0 0;
+    color: var(--color-dim) !important;
+  }
+
+  :global(.leaflet-control-attribution a) {
+    color: var(--color-accent2) !important;
+  }
+</style>
