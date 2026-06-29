@@ -32,7 +32,7 @@
   ).replace(/\/+$/, '');
 
   const MAX = 8; // rolling window of most-recent adverts
-  const RELEASE_MS = 250; // throttle: release at most one queued advert per tick
+  const RELEASE_MS = 500; // throttle: release at most one queued advert per tick
   const MAX_QUEUE = 40; // cap the backlog so a burst can't pile up unbounded
 
   let adverts = $state(savedAdverts); // resume from the last session if any
