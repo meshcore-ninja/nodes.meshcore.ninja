@@ -3,8 +3,8 @@
   import { base } from '$app/paths';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { Dialog, Tooltip } from 'bits-ui';
-  import { ChevronRight, X } from '@lucide/svelte';
+  import { Dialog, Tooltip, Select } from 'bits-ui';
+  import { ChevronRight, ChevronDown, X } from '@lucide/svelte';
   import { MeshCoreDecoder, Utils } from '@michaelhart/meshcore-decoder';
   import {
     nodeDetail,
@@ -13,14 +13,17 @@
     nodeNetworkStats,
     nodeAdvertActivity,
     nodeMapPublishes,
-    meshNetworks
+    meshNetworks,
+    bands
   } from '$lib/api.js';
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NodeMap from '$lib/NodeMap.svelte';
   import AddContactQR from '$lib/AddContactQR.svelte';
   import Flag from '$lib/Flag.svelte';
+  import NetworkPill from '$lib/NetworkPill.svelte';
   import { networkFlags, networkUrl } from '$lib/flags.js';
   import { TYPE_LABEL, fmtTime, fmtAgo, fmtCoords, shortKey, shortKey8, shortKeyWide } from '$lib/format.js';
+  import { reverseGeocode, formatPlaceLabel, externalMapLinks } from '$lib/geocode.js';
 
   const pubkey = $derived($page.params.pubkey);
   const validKey = $derived(/^[0-9a-f]{64}$/i.test(pubkey));
@@ -56,6 +59,8 @@
   let advertActivity = $state([]);
   let mapPublishes = $state([]); // captured map.meshcore.io snapshots, newest first
   let catalog = $state({});
+  let bandCatalog = $state({}); // band id -> { name, range, region }, from bands.json
+  bands().then((b) => (bandCatalog = b));
   let showAllLinks = $state(false);
   let neighborSort = $state('');
   let neighborSortDir = $state('asc');
@@ -63,6 +68,71 @@
   let heatmapHoveredDay = $state(null);
   let heatmapGridEl = $state(null);
   let heatmapResizeObserver;
+
+  let place = $state(null);
+  let placeLoading = $state(false);
+
+  const locationSubtitle = $derived.by(() => {
+    if (!node?.hasGps) return 'Location unknown';
+    if (placeLoading) return '';
+    return formatPlaceLabel(place);
+  });
+
+  const locationMapLinks = $derived(
+    node?.hasGps ? externalMapLinks(node.lat, node.lon, { pubkey }) : []
+  );
+
+  const locationActionItems = $derived([
+    { value: 'copy', label: 'Copy to clipboard' },
+    ...locationMapLinks.map(({ value, label }) => ({ value, label }))
+  ]);
+
+  let locationMenuValue = $state('');
+  let coordsCopied = $state(false);
+  let coordsCopyTimer;
+
+  function handleLocationAction(value) {
+    if (!value || !node?.hasGps) return;
+    if (value === 'copy') {
+      navigator.clipboard?.writeText(fmtCoords(node.lat, node.lon)).then(() => {
+        coordsCopied = true;
+        clearTimeout(coordsCopyTimer);
+        coordsCopyTimer = setTimeout(() => (coordsCopied = false), 1200);
+      });
+    } else {
+      const link = locationMapLinks.find((l) => l.value === value);
+      if (link) window.open(link.url, '_blank', 'noopener,noreferrer');
+    }
+    locationMenuValue = '';
+  }
+
+  $effect(() => {
+    const pk = pubkey;
+    const n = node;
+    if (!n?.hasGps || !Number.isFinite(Number(n.lat)) || !Number.isFinite(Number(n.lon))) {
+      place = null;
+      placeLoading = false;
+      return;
+    }
+    const lat = Number(n.lat);
+    const lon = Number(n.lon);
+    const ac = new AbortController();
+    placeLoading = true;
+    place = null;
+    reverseGeocode(lat, lon, ac.signal)
+      .then((p) => {
+        if (pk !== pubkey) return;
+        place = p;
+      })
+      .catch((e) => {
+        if (e?.name === 'AbortError') return;
+        if (pk === pubkey) place = null;
+      })
+      .finally(() => {
+        if (pk === pubkey) placeLoading = false;
+      });
+    return () => ac.abort();
+  });
 
   const HEATMAP_CELL = 16; // 1rem hit target; 12px visual cell leaves a virtual gap
   const HEATMAP_SIDE_PAD = 24; // px-3 left + right on the card
@@ -203,6 +273,15 @@
     if (!hasValidCoords(node) || !linkHasLocation(link)) return null;
     return distanceKm(node.lat, node.lon, link.neighbor.lat, link.neighbor.lon);
   }
+
+  const MAX_REAL_LINK_KM = 500;
+
+  function linkUnreal(link) {
+    const dist = linkDistanceKm(link);
+    return dist != null && dist > MAX_REAL_LINK_KM;
+  }
+
+  const mapLinks = $derived(links.filter((l) => !linkUnreal(l)));
 
   function fmtDistance(km) {
     if (km == null) return '—';
@@ -666,20 +745,64 @@
   // Newest / oldest captured map publish (the API returns them newest-first).
   const latestPublish = $derived(mapPublishes[0] ?? null);
 
-  // Radio (LoRa) settings, sourced from the map.meshcore.io directory's params —
-  // adverts don't carry these. Taken from the most recent publish that has them.
+  // Best-effort band id ("868", "915", …) for a frequency, by matching it into a
+  // band's range from bands.json. Used only for the map fallback, where no band id
+  // is supplied (networks declare their band explicitly).
+  function inferBandKey(freqMhz) {
+    if (freqMhz == null) return '';
+    for (const [key, b] of Object.entries(bandCatalog)) {
+      const m = (b?.range || '').match(/([\d.]+)\s*[–-]\s*([\d.]+)\s*(GHz|MHz)/i);
+      if (!m) continue;
+      let lo = parseFloat(m[1]);
+      let hi = parseFloat(m[2]);
+      if (/ghz/i.test(m[3])) {
+        lo *= 1000;
+        hi *= 1000;
+      }
+      if (freqMhz >= lo && freqMhz <= hi) return key;
+    }
+    return '';
+  }
+
+  // Radio (LoRa) settings. Primary source is the node's current (most-recently
+  // active) network's declared radio config — the network is shown as the source.
+  // map.meshcore.io params are only a fallback for nodes we don't observe live.
   const radio = $derived.by(() => {
+    const net = netDetails[0] ?? null;
+    const nr = net ? catalog[net.id]?.radio : null;
+    if (nr && (nr.frequency_mhz != null || nr.bandwidth_khz != null || nr.spreading_factor != null)) {
+      return {
+        source: net.name,
+        networkId: net.id,
+        band: nr.frequency != null ? String(nr.frequency) : inferBandKey(nr.frequency_mhz),
+        freq: nr.frequency_mhz,
+        bw: nr.bandwidth_khz,
+        sf: nr.spreading_factor,
+        cr: nr.coding_rate ?? null,
+        channel: nr.public_channel ?? ''
+      };
+    }
     for (const p of mapPublishes) {
       const params = p?.params;
       if (params && typeof params === 'object') {
         const { freq, bw, sf, cr } = params;
         if (freq != null || bw != null || sf != null || cr != null) {
-          return { freq, bw, sf, cr };
+          return {
+            source: 'map.meshcore.io',
+            band: inferBandKey(freq),
+            freq,
+            bw,
+            sf,
+            cr: cr != null ? `4/${cr}` : null,
+            channel: ''
+          };
         }
       }
     }
     return null;
   });
+
+  const bandInfo = $derived(radio?.band ? (bandCatalog[radio.band] ?? null) : null);
 
   const firstCaptured = $derived(
     mapPublishes.length ? mapPublishes[mapPublishes.length - 1].firstCapturedAt || 0 : 0
@@ -859,39 +982,164 @@
   {:else if error}
     <p class="text-bad mt-8">{error}</p>
   {:else if node}
+    {#snippet placeLoadingSkeleton()}
+      <span class="inline-flex items-center gap-1.5" role="status" aria-label="Loading location">
+        <span class="h-3 w-4 shrink-0 animate-pulse rounded-sm bg-edge"></span>
+        <span class="h-3 w-24 animate-pulse rounded bg-edge sm:w-32"></span>
+      </span>
+    {/snippet}
     <!-- Top: identity + overview + extras (left), map + add-to-app (top-right) -->
     <div class="mt-4 grid gap-6 lg:grid-cols-3 items-start">
       <!-- Map + QR: below main content on mobile, sticky sidebar on desktop -->
       <aside class="order-2 space-y-6 lg:order-2 lg:sticky lg:top-6">
         {#if radio}
           <section>
-            <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Radio</h2>
-            <div class="grid grid-cols-2 gap-2 rounded-xl border border-edge bg-elev p-3">
-              {#snippet radioStat(label, value)}
-                <div class="rounded-lg bg-bg px-3 py-2">
-                  <div class="text-xs text-muted">{label}</div>
-                  <div class="mt-0.5 font-mono text-sm font-semibold">{value}</div>
-                </div>
-              {/snippet}
-              {@render radioStat('Frequency', radio.freq != null ? `${radio.freq} MHz` : '—')}
-              {@render radioStat('Bandwidth', radio.bw != null ? `${radio.bw} kHz` : '—')}
-              {@render radioStat('Spreading', radio.sf != null ? `SF${radio.sf}` : '—')}
-              {@render radioStat('Coding rate', radio.cr != null ? `4/${radio.cr}` : '—')}
+            <div class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">LoRa Radio</h2>
+              <div class="flex items-center gap-1.5 text-[11px] text-muted">
+                <span>Source:</span>
+                {#if radio.networkId}
+                  <a
+                    href={networkUrl(radio.networkId)}
+                    rel="noreferrer"
+                    class="inline-flex hover:opacity-80"
+                  >
+                    <NetworkPill id={radio.networkId} {catalog} />
+                  </a>
+                  <span>network</span>
+                {:else}
+                  <span class="inline-flex items-center rounded bg-elev2 px-1.5 py-0.5 text-[10px] leading-none text-dim">
+                    map.meshcore.io
+                  </span>
+                {/if}
+              </div>
             </div>
-            <p class="mt-1.5 text-[11px] text-muted">From the map.meshcore.io directory.</p>
+            <div class="rounded-xl border border-edge bg-elev p-3">
+              <div class="mb-2 flex flex-wrap items-center gap-2">
+                <span class="text-xs text-muted">Band</span>
+                <a
+                  href="https://meshcore.ninja/bands"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="rounded-full border px-2 py-0.5 text-xs font-semibold transition-colors"
+                  style={bandInfo?.color
+                    ? `color:${bandInfo.color};border-color:${bandInfo.color}66;background-color:${bandInfo.color}1f`
+                    : 'color:var(--color-accent);border-color:color-mix(in srgb,var(--color-accent) 40%,transparent);background-color:color-mix(in srgb,var(--color-accent) 10%,transparent)'}
+                  title={bandInfo
+                    ? `${bandInfo.range} · ${bandInfo.region}${bandInfo.color ? ` · band colour ${bandInfo.color}` : ''}`
+                    : 'View band reference'}
+                >
+                  {bandInfo?.region || (radio.band ? `${radio.band} MHz` : 'Unknown')}
+                </a>
+                {#if bandInfo?.name}
+                  <span class="text-[11px] text-dim">{bandInfo.name}</span>
+                {/if}
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                {#snippet radioStat(label, value)}
+                  <div class="rounded-lg bg-bg px-3 py-2">
+                    <div class="text-xs text-muted">{label}</div>
+                    <div class="mt-0.5 font-mono text-sm font-semibold">{value}</div>
+                  </div>
+                {/snippet}
+                {@render radioStat('Frequency', radio.freq != null ? `${radio.freq} MHz` : '—')}
+                {@render radioStat('Bandwidth', radio.bw != null ? `${radio.bw} kHz` : '—')}
+                {@render radioStat('Spreading', radio.sf != null ? `SF${radio.sf}` : '—')}
+                {@render radioStat('Coding rate', radio.cr ?? '—')}
+              </div>
+              {#if radio.channel}
+                <div class="mt-2 flex items-center gap-2 text-xs">
+                  <span class="text-muted">Public channel</span>
+                  <span class="font-mono text-dim">{radio.channel}</span>
+                </div>
+              {/if}
+            </div>
           </section>
         {/if}
 
         <section>
-          <div class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Location</h2>
-            {#if node.hasGps}
-              <span class="font-mono text-xs text-dim break-all sm:break-normal sm:whitespace-nowrap">{fmtCoords(node.lat, node.lon)}</span>
-            {/if}
+            <div class="flex flex-col items-start gap-0.5 sm:items-end">
+              {#if node.hasGps}
+                <Select.Root
+                  type="single"
+                  bind:value={locationMenuValue}
+                  onValueChange={handleLocationAction}
+                  items={locationActionItems}
+                  allowDeselect
+                >
+                  <Select.Trigger
+                    aria-label="Location actions"
+                    class="flex cursor-pointer flex-col items-start gap-0.5 rounded border-0 bg-transparent p-0 text-left outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-edge sm:items-end sm:text-right"
+                  >
+                    {#if locationSubtitle}
+                      <span class="inline-flex items-center gap-1.5 text-xs text-dim">
+                        {#if place?.countryCode}
+                          <Flag code={place.countryCode} class="h-3 w-4" />
+                        {/if}
+                        {locationSubtitle}
+                      </span>
+                    {:else if placeLoading}
+                      {@render placeLoadingSkeleton()}
+                    {/if}
+                    <span class="inline-flex items-center gap-1 font-mono text-xs text-dim break-all sm:break-normal sm:whitespace-nowrap">
+                      {#if coordsCopied}
+                        <span class="font-sans text-accent">Copied</span>
+                      {:else}
+                        {fmtCoords(node.lat, node.lon)}
+                      {/if}
+                      <ChevronDown class="size-3 shrink-0 text-muted" />
+                    </span>
+                  </Select.Trigger>
+                  <Select.Portal>
+                    <Select.Content
+                      side="bottom"
+                      align="end"
+                      sideOffset={6}
+                      class="z-50 min-w-[12rem] overflow-y-auto rounded-lg border border-edge bg-elev2 p-1 text-xs text-ink shadow-lg shadow-black/30 outline-none"
+                    >
+                      <Select.Viewport>
+                        <Select.Item
+                          value="copy"
+                          label="Copy to clipboard"
+                          class="flex cursor-pointer select-none items-center rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-accent/15 data-[highlighted]:text-accent"
+                        >
+                          {#snippet children()}
+                            <span>Copy to clipboard</span>
+                          {/snippet}
+                        </Select.Item>
+                        {#if locationMapLinks.length}
+                          <div class="my-1 h-px bg-edge" role="separator"></div>
+                          <Select.Group>
+                            <Select.GroupHeading
+                              class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted"
+                            >
+                              Open in
+                            </Select.GroupHeading>
+                            {#each locationMapLinks as link (link.value)}
+                              <Select.Item
+                                value={link.value}
+                                label={link.label}
+                                class="flex cursor-pointer select-none items-center rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-accent/15 data-[highlighted]:text-accent"
+                              >
+                                {#snippet children()}
+                                  <span>{link.label} ↗</span>
+                                {/snippet}
+                              </Select.Item>
+                            {/each}
+                          </Select.Group>
+                        {/if}
+                      </Select.Viewport>
+                    </Select.Content>
+                  </Select.Portal>
+                </Select.Root>
+              {:else}
+                <span class="text-xs text-dim">Location unknown</span>
+              {/if}
+            </div>
           </div>
-          {#key pubkey}
-            <NodeMap lat={node.lat} lon={node.lon} hasGps={node.hasGps} {links} />
-          {/key}
+          <NodeMap lat={node.lat} lon={node.lon} hasGps={node.hasGps} links={mapLinks} />
           {#if node.hasGps}
             <a
               class="mt-2 block text-center text-sm text-accent2 hover:underline"
@@ -927,6 +1175,18 @@
                   <span class="h-2 w-2 rounded-full {freshColor}"></span>
                   {mapOnly ? 'Last map publish' : 'Last heard'} {fmtAgo(lastHeard)}
                 </span>
+                {#if locationSubtitle}
+                  <span class="ml-1 inline-flex items-center gap-1.5 sm:ml-1.5">
+                    {#if place?.countryCode}
+                      <Flag code={place.countryCode} class="h-3 w-4" />
+                    {/if}
+                    {locationSubtitle}
+                  </span>
+                {:else if placeLoading}
+                  <span class="ml-1 sm:ml-1.5">
+                    {@render placeLoadingSkeleton()}
+                  </span>
+                {/if}
               </div>
             </div>
           </div>
@@ -1068,7 +1328,7 @@
                             >
                               <span
                                 aria-hidden="true"
-                                class={`block h-3 w-3 rounded-[2px] border ${heatmapCellHovered(day) ? 'border-accent' : 'border-transparent'} ${heatmapColor(heatmapLevel(day.adverts))}`}
+                                class={`block h-3 w-3 rounded-[2px] border ${heatmapCellHovered(day) ? 'border-ink shadow-[0_0_0_1px_var(--color-accent)]' : 'border-transparent'} ${heatmapColor(heatmapLevel(day.adverts))}`}
                               ></span>
                             </Tooltip.Trigger>
                             <Tooltip.Portal>
@@ -1079,7 +1339,7 @@
                               >
                                 <div class="font-medium">{heatmapTooltipText(day)}</div>
                                 <div class="mt-0.5 text-muted">{heatmapTooltipCount(day)}</div>
-                                <Tooltip.Arrow class="fill-elev2" />
+                                <Tooltip.Arrow class="text-edge" />
                               </Tooltip.Content>
                             </Tooltip.Portal>
                           </Tooltip.Root>
@@ -1166,7 +1426,12 @@
                         {shortKey(l.neighbor.pubkey)}
                       </td>
                       <td class="px-3 py-2 whitespace-nowrap text-right text-xs">
-                        {#if dist != null}
+                        {#if linkUnreal(l)}
+                          <span
+                            class="text-warn"
+                            title="{fmtDistance(dist)} — over {MAX_REAL_LINK_KM} km, likely not a real radio link"
+                          >unreal</span>
+                        {:else if dist != null}
                           <span class="font-mono">{fmtDistance(dist)}</span>
                         {:else}
                           <span class="text-muted" title={distanceUnavailableReason(l)}>No coordinates</span>
@@ -1283,13 +1548,12 @@
                 <td class="px-3 py-2 whitespace-nowrap text-xs">
                   {#if a.networkId}
                     <a
-                      class="inline-flex items-center gap-1.5 text-accent2 hover:underline"
+                      class="inline-flex hover:opacity-80"
                       href={networkUrl(a.networkId)}
                       onclick={(event) => event.stopPropagation()}
                       rel="noreferrer"
                     >
-                      <Flag code={netFlagCode(a.networkId)} class="h-3.5 w-5" />
-                      {networkName(a.networkId)}
+                      <NetworkPill id={a.networkId} {catalog} />
                     </a>
                   {:else}—{/if}
                 </td>
@@ -1335,13 +1599,12 @@
                     <td class="px-3 py-2 whitespace-nowrap text-xs text-dim">
                       {#if detail.networkId}
                         <a
-                          class="inline-flex items-center gap-1.5 text-accent2 hover:underline"
+                          class="inline-flex hover:opacity-80"
                           href={networkUrl(detail.networkId)}
                           onclick={(event) => event.stopPropagation()}
                           rel="noreferrer"
                         >
-                          <Flag code={netFlagCode(detail.networkId)} class="h-3.5 w-5" />
-                          {networkName(detail.networkId)}
+                          <NetworkPill id={detail.networkId} {catalog} />
                         </a>
                       {:else}—{/if}
                     </td>

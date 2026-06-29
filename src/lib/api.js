@@ -13,22 +13,44 @@ export const API_BASE = (import.meta.env?.VITE_API_BASE || 'https://api.meshcore
  * @param {string} [p.q] name substring (case-insensitive) or pubkey hex prefix
  * @param {number[]} [p.types] node types: 1=chat 2=repeater 3=room 4=sensor
  * @param {string} [p.net] restrict to a network id
- * @param {string} [p.active] one of 24h|7d|30d (omit/`all` = any age)
+ * @param {{key:string,value:string,radiusKm?:number}[]} [p.filters] structured search filters
  * @param {number} [p.limit]
  * @param {AbortSignal} [signal]
- * @returns {Promise<{results:any[],returned:number,total:number,capped:boolean}>}
+ * @returns {Promise<{results:any[],returned:number,total:number,capped:boolean,computeMs?:number,apiMs?:number}>}
  */
-export function search({ q, types, net, active, limit } = {}, signal) {
+export function search({ q, types, net, active, filters, limit } = {}, signal) {
   const sp = new URLSearchParams();
   if (q) sp.set('q', q);
   if (types?.length) sp.set('types', [...types].sort().join(','));
   if (net) sp.set('networks', net);
   if (active && active !== 'all') sp.set('active', active);
+  for (const f of filters ?? []) {
+    if (!f?.key || f.value == null || f.value === '') continue;
+    sp.append(f.key, String(f.value));
+    if (f.key === 'near' && f.radiusKm) sp.set('radius', String(f.radiusKm));
+  }
   if (limit) sp.set('limit', String(limit));
+  const started = performance.now();
   return fetch(`${API_BASE}/api/search?${sp.toString()}`, { signal }).then((r) => {
     if (!r.ok) throw new Error(`search ${r.status}`);
-    return r.json();
+    return r.json().then((body) => ({
+      ...body,
+      apiMs: Math.max(0, performance.now() - started - (body.computeMs || 0))
+    }));
   });
+}
+
+let searchOptionsPromise;
+export function searchOptions(signal) {
+  if (!searchOptionsPromise || signal) {
+    searchOptionsPromise = fetch(`${API_BASE}/api/search/options`, { signal })
+      .then((r) => {
+        if (!r.ok) throw new Error(`search options ${r.status}`);
+        return r.json();
+      })
+      .catch(() => ({ commands: [] }));
+  }
+  return searchOptionsPromise;
 }
 
 /**
@@ -159,6 +181,23 @@ export function meshNetworks() {
       .catch(() => ({}));
   }
   return meshNetworksPromise;
+}
+
+let bandsPromise;
+/**
+ * The LoRa band catalog from the site's bands.json, keyed by band id (e.g. "868",
+ * "915"), each `{name, range, region}`. Used to render a node's Band badge.
+ * Fetched once and memoized; failures resolve to an empty map.
+ * @returns {Promise<Record<string, {name:string,range:string,region:string}>>}
+ */
+export function bands() {
+  if (!bandsPromise) {
+    bandsPromise = fetch(`${CATALOG_ORIGIN}/bands.json`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d) => (d && typeof d === 'object' ? d : {}))
+      .catch(() => ({}));
+  }
+  return bandsPromise;
 }
 
 let networksPromise;

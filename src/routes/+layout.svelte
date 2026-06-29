@@ -50,7 +50,7 @@
         <div class="flex items-center gap-3 min-w-0">
           <a href="{base}/" class="font-semibold tracking-tight flex items-center gap-2 min-w-0 shrink-0">
             <span class="text-accent shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-dot-icon lucide-circle-dot"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg></span>
-            <span class="truncate">MeshCore Nodes</span>
+            <span class="truncate">nodes.meshcore.ninja</span>
           </a>
           <button
             type="button"

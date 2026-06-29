@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import 'maplibre-gl/dist/maplibre-gl.css';
 
 /* Design tokens — shared with meshcore.ninja and map.meshcore.ninja so the
    directory matches the rest of the catalog. Generates utilities like bg-bg,
@@ -52,6 +53,14 @@ a {
   color: inherit;
 }
 
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 * {
   scrollbar-color: var(--color-edge) var(--color-elev);
 }
@@ -90,6 +99,89 @@ a {
 
 .shiki-json code {
   white-space: pre;
+}
+
+/* MapLibre controls — scoped to node map; loaded after maplibre-gl.css above. */
+.nm-map .maplibregl-ctrl-group {
+  background: color-mix(in srgb, var(--color-elev) 92%, transparent) !important;
+  border: 1px solid var(--color-edge) !important;
+  border-radius: 0.75rem !important;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.14),
+    0 5px 16px rgb(0 0 0 / 0.12) !important;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+
+:root[data-theme='light'] .nm-map .maplibregl-ctrl-group {
+  box-shadow:
+    0 1px 2px rgb(31 35 40 / 0.1),
+    0 6px 18px rgb(31 35 40 / 0.09) !important;
+}
+
+.nm-map .maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--color-edge) !important;
+}
+
+.nm-map .maplibregl-ctrl button:not(:disabled):hover,
+.nm-map .maplibregl-ctrl button:not(:disabled):active,
+.nm-map .maplibregl-ctrl-group button:hover {
+  background-color: var(--color-elev2) !important;
+}
+
+:root[data-theme='dark'] .nm-map .maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: invert(1);
+}
+
+.nm-map .maplibregl-ctrl.maplibregl-ctrl-attrib,
+.nm-map .maplibregl-ctrl-attrib.maplibregl-compact {
+  background-color: color-mix(in srgb, var(--color-elev) 92%, transparent) !important;
+  border: 1px solid var(--color-edge);
+  border-radius: 999px !important;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  backdrop-filter: blur(8px);
+  color: var(--color-dim) !important;
+  margin: 0 8px 8px;
+}
+
+:root[data-theme='light'] .nm-map .maplibregl-ctrl.maplibregl-ctrl-attrib,
+:root[data-theme='light'] .nm-map .maplibregl-ctrl-attrib.maplibregl-compact {
+  box-shadow: 0 1px 2px rgb(31 35 40 / 0.08);
+}
+
+.nm-map .maplibregl-ctrl-attrib a {
+  color: var(--color-dim) !important;
+}
+
+.nm-map .maplibregl-ctrl-attrib a:hover {
+  color: var(--color-accent) !important;
+}
+
+.nm-map .maplibregl-ctrl-attrib-button,
+.nm-map .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.nm-map .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
+  background-color: transparent !important;
+}
+
+.nm-map .maplibregl-ctrl-attrib-button:focus,
+.nm-map .maplibregl-ctrl-attrib summary.maplibregl-ctrl-attrib-button:focus {
+  box-shadow: none !important;
+  outline: none;
+}
+
+/* MapLibre draws a second info glyph on the pill; hide it (button remains). */
+.nm-map .maplibregl-ctrl-attrib.maplibregl-compact:after {
+  display: none !important;
+  content: none !important;
+  background: none !important;
+}
+
+:root[data-theme='dark'] .nm-map .maplibregl-ctrl-attrib-button {
+  filter: invert(1);
 }
 
 :root[data-theme='dark'] .qr-frame {
