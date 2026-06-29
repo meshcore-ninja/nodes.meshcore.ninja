@@ -1,0 +1,26 @@
+{
+  "name": "nodes-meshcore-ninja",
+  "version": "0.1.0",
+  "description": "A searchable public directory of MeshCore nodes, built from observed signed adverts — served by the MeshCore Ninja API.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.66.0",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.1",
+    "svelte": "^5.56.3",
+    "tailwindcss": "^4.3.1",
+    "vite": "^8.0.16"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.22.0",
+    "country-flag-icons": "^1.6.19",
+    "leaflet": "^1.9.4",
+    "qrcode-generator": "^2.0.4"
+  }
+}

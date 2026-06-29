@@ -1,0 +1,52 @@
+@import 'tailwindcss';
+
+/* Design tokens — shared with meshcore.ninja and map.meshcore.ninja so the
+   directory matches the rest of the catalog. Generates utilities like bg-bg,
+   text-dim, border-edge, text-accent, etc. (Tailwind v4 CSS-first theming). */
+@theme {
+  --color-bg: #0d1117;
+  --color-elev: #161b22;
+  --color-elev2: #1c2430;
+  --color-edge: #2a3340;
+  --color-ink: #e6edf3;
+  --color-dim: #9aa7b4;
+  --color-accent: #4dd0a7;
+  --color-accent2: #5aa9ff;
+  --color-ok: #3fb950;
+  --color-warn: #d29922;
+  --color-muted: #8b949e;
+  --color-bad: #f85149;
+
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root[data-theme='light'] {
+  --color-bg: #ffffff;
+  --color-elev: #f6f8fa;
+  --color-elev2: #eaeef2;
+  --color-edge: #d0d7de;
+  --color-ink: #1f2328;
+  --color-dim: #59636e;
+  --color-accent: #1a8268;
+  --color-accent2: #2563eb;
+  --color-ok: #1a7f37;
+  --color-warn: #9a6700;
+  --color-muted: #6e7781;
+  --color-bad: #cf222e;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}
