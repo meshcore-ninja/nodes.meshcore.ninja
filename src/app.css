@@ -50,3 +50,47 @@ body {
 a {
   color: inherit;
 }
+
+* {
+  scrollbar-color: var(--color-edge) var(--color-elev);
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-elev);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border: 3px solid var(--color-elev);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--color-elev);
+}
+
+.shiki-json pre {
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--color-elev) !important;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.shiki-json code {
+  white-space: pre;
+}
+
+:root[data-theme='dark'] .qr-frame {
+  filter: invert(1);
+}

@@ -19,8 +19,11 @@
   },
   "dependencies": {
     "@lucide/svelte": "^1.22.0",
+    "@michaelhart/meshcore-decoder": "^0.3.0",
+    "bits-ui": "^2.18.1",
     "country-flag-icons": "^1.6.19",
     "leaflet": "^1.9.4",
-    "qrcode-generator": "^2.0.4"
+    "qrcode-generator": "^2.0.4",
+    "shiki": "^4.3.0"
   }
 }

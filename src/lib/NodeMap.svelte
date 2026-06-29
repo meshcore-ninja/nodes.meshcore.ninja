@@ -18,6 +18,10 @@
   let themeObserver;
   let ready = $state(false);
 
+  function validCoord(a, b) {
+    return Number.isFinite(a) && Number.isFinite(b);
+  }
+
   function setTiles() {
     if (!map) return;
     const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -36,12 +40,16 @@
     overlay?.remove();
     overlay = L.layerGroup().addTo(map);
     const pts = [];
+    const nodeHasLocation = hasGps && validCoord(lat, lon);
 
-    if (hasGps) {
+    if (nodeHasLocation) {
       pts.push([lat, lon]);
       // Line width is relative to packet count across this node's links, so the
       // busiest neighbour reads widest (like the main map).
-      const located = links.filter((l) => l.neighbor?.hasGps);
+      const located = links.filter((l) => {
+        const n = l.neighbor;
+        return n?.hasGps && validCoord(n.lat, n.lon);
+      });
       const maxPkt = located.reduce((m, l) => Math.max(m, l.packetCount || 0), 0) || 1;
 
       for (const l of located) {
@@ -79,7 +87,7 @@
 
     if (pts.length > 1) {
       map.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 11, animate: false });
-    } else if (hasGps) {
+    } else if (nodeHasLocation) {
       map.setView([lat, lon], 6, { animate: false }); // lone node → continental view
     } else {
       map.setView([20, 0], 2, { animate: false }); // no GPS → world
@@ -87,7 +95,8 @@
   }
 
   onMount(() => {
-    map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
+    map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false, zoomAnimation: false,
+      fadeAnimation: false });
     setTiles(); // CARTO raster tiles that follow the app theme
     ready = true;
     setTimeout(() => map?.invalidateSize(), 60);
@@ -107,6 +116,8 @@
     if (ready) draw();
   });
 
+  const hasLocation = $derived(hasGps && validCoord(lat, lon));
+
   onDestroy(() => {
     themeObserver?.disconnect();
     map?.remove();
@@ -115,7 +126,7 @@
 
 <div class="relative">
   <div bind:this={el} class="h-72 w-full rounded-xl overflow-hidden border border-edge"></div>
-  {#if !hasGps}
+  {#if !hasLocation}
     <div class="absolute inset-0 z-[500] flex items-center justify-center pointer-events-none">
       <span class="rounded-md border border-edge bg-bg/80 px-3 py-1 text-xs text-dim">
         No GPS location

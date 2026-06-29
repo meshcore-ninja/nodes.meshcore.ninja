@@ -3,7 +3,7 @@
   // app, using the documented scheme:
   //   meshcore://contact/add?name=…&public_key=…&type=…
   // (see MeshCore/docs/qr_codes.md). Built from directory data — no signed card
-  // needed. The QR is rendered on a white card so it stays scannable in any theme.
+  // needed.
   import qrcode from 'qrcode-generator';
   import { TYPE_LABEL } from '$lib/format.js';
 
@@ -32,7 +32,9 @@
 
 <div class="rounded-xl border border-edge bg-elev p-4">
   <div class="text-xs text-muted mb-3">Add to MeshCore app</div>
-  <div class="mx-auto w-44 rounded-lg bg-white p-3 [&>svg]:block [&>svg]:w-full [&>svg]:h-auto">
+  <div
+    class="qr-frame mx-auto w-full max-w-72 rounded-lg bg-white p-4 [&>svg]:block [&>svg]:h-auto [&>svg]:w-full"
+  >
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
     {@html svg}
   </div>
