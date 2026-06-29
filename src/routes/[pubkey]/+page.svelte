@@ -51,6 +51,12 @@
     });
   }
 
+  function handleKeydown(event) {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+    event.preventDefault();
+    goto(`${base}/`);
+  }
+
   // Load detail + first history page whenever the pubkey changes.
   $effect(() => {
     const pk = pubkey;
@@ -362,6 +368,8 @@
 <svelte:head>
   <title>{node?.name || 'Node'} — MeshCore Nodes</title>
 </svelte:head>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="mx-auto max-w-6xl w-full px-4 py-6">
   <a href="{base}/" class="text-sm text-dim hover:text-ink">← Search</a>
