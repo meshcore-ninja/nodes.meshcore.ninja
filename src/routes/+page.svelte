@@ -743,7 +743,7 @@
                 type="text"
                 value={q}
                 oninput={handleSearchInput}
-                placeholder={filters.length ? '' : 'Search by name or public key, or type /filter…'}
+                placeholder={filters.length ? '' : 'Search by name or public key…'}
                 autocomplete="off"
                 autocapitalize="off"
                 spellcheck="false"
