@@ -9,7 +9,7 @@
   import { base } from '$app/paths';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { search, searchOptions, meshNetworks, bands } from '$lib/api.js';
+  import { search, searchOptions, meshNetworks, bands, nodeCount } from '$lib/api.js';
   import { focusSearchInput } from '$lib/search.js';
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NetworkPill from '$lib/NetworkPill.svelte';
@@ -23,6 +23,11 @@
   // Band catalog (band id → { name, range, region, color }), for the band badge.
   let bandCatalog = $state({});
   bands().then((b) => (bandCatalog = b));
+
+  // Total nodes in the directory, shown in the tagline. Refreshed on a slow
+  // interval so the count keeps creeping up as new nodes are observed.
+  let totalNodes = $state(null);
+  const nfmt = new Intl.NumberFormat('en-US');
 
   // The LoRa band a result is on, derived from the first of its networks that
   // declares a radio config. null when unknown (e.g. map-only or radio-less nets).
@@ -632,6 +637,18 @@
 
   onMount(() => {
     requestAnimationFrame(() => searchInput?.focus());
+
+    let stop = false;
+    const refreshCount = async () => {
+      const n = await nodeCount();
+      if (!stop && n != null) totalNodes = n;
+    };
+    refreshCount();
+    const countTimer = setInterval(refreshCount, 15000);
+    return () => {
+      stop = true;
+      clearInterval(countTimer);
+    };
   });
 </script>
 
@@ -650,7 +667,7 @@
     </a>
     {#if !hasQuery}
       <p class="text-dim mt-2">
-        A searchable directory of MeshCore nodes, built from observed signed adverts.
+        A searchable directory of {#if totalNodes != null}<span class="tabular-nums text-ink">{nfmt.format(totalNodes)}</span>&nbsp;{/if}MeshCore nodes, built from observed signed adverts.
       </p>
     {/if}
   </div>

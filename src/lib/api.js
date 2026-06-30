@@ -40,6 +40,23 @@ export function search({ q, types, net, active, filters, limit } = {}, signal) {
   });
 }
 
+/**
+ * Total number of nodes in the directory. The search endpoint reports a global
+ * `total` for the matching set, so an empty query (limit 1) yields the full
+ * directory size cheaply. Failures resolve to null so the caller can hide it.
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<number|null>}
+ */
+export function nodeCount(signal) {
+  return fetch(`${API_BASE}/api/search?limit=1`, { signal })
+    .then((r) => {
+      if (!r.ok) throw new Error(`count ${r.status}`);
+      return r.json();
+    })
+    .then((d) => (Number.isFinite(d?.total) ? d.total : null))
+    .catch(() => null);
+}
+
 let searchOptionsPromise;
 export function searchOptions(signal) {
   if (!searchOptionsPromise || signal) {

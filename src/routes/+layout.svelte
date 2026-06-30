@@ -92,7 +92,12 @@
 
   <footer class="border-t border-edge text-dim text-xs">
     <div class="mx-auto max-w-6xl px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <span class="text-center sm:text-left">Built from observed signed adverts</span>
+      <span class="text-center sm:text-left">
+        Powered by
+        <a class="hover:text-ink" href="https://tangleveil.meshcore.ninja/" rel="noreferrer">Tangleveil</a>
+        ·
+        <a class="hover:text-ink" href="https://github.com/meshcore-ninja/nodes.meshcore.ninja" rel="noreferrer">source code</a>
+      </span>
       <div class="flex items-center justify-center gap-4 sm:justify-end">
         <a class="hover:text-ink" href="https://meshcore.ninja" rel="noreferrer">meshcore.ninja ↗</a>
         <a class="hover:text-ink" href="https://map.meshcore.ninja" rel="noreferrer">Map ↗</a>
