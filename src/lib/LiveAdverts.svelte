@@ -181,10 +181,11 @@
       {/if}
     </div>
   {:else}
-    <ul class="divide-y divide-edge overflow-hidden rounded-xl border border-edge">
+    <ul class="divide-y divide-edge overflow-hidden rounded-xl border border-edge bg-gradient-to-b from-elev/50 to-transparent">
       {#each adverts as a, i (a.key)}
         <li
           class:last-row-fade={i === adverts.length - 1}
+          class:fresh={now - a.at < 6}
           animate:flip={{ duration: 250 }}
           in:fly={{ y: -10, duration: 300 }}
         >
@@ -229,5 +230,28 @@
   .last-row-fade {
     -webkit-mask-image: linear-gradient(to bottom, #000 35%, transparent);
     mask-image: linear-gradient(to bottom, #000 35%, transparent);
+  }
+
+  /* A new advert lands with a green wash + accent edge that fades out over a few
+     seconds, so the eye can tell at a glance how fresh each row is. */
+  .fresh {
+    animation: advert-fresh 5s ease-out;
+  }
+
+  @keyframes advert-fresh {
+    0% {
+      background-color: color-mix(in srgb, var(--color-accent) 24%, transparent);
+      box-shadow: inset 2px 0 0 var(--color-accent);
+    }
+    100% {
+      background-color: transparent;
+      box-shadow: inset 2px 0 0 transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fresh {
+      animation: none;
+    }
   }
 </style>

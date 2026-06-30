@@ -14,6 +14,7 @@
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NetworkPill from '$lib/NetworkPill.svelte';
   import LiveAdverts from '$lib/LiveAdverts.svelte';
+  import RollingNumber from '$lib/RollingNumber.svelte';
   import { TYPE_LABEL, fmtAgo, shortKey, fmtCoords } from '$lib/format.js';
 
   // Network catalog (id → details), for resolving names + flags in results.
@@ -27,7 +28,6 @@
   // Total nodes in the directory, shown in the tagline. Refreshed on a slow
   // interval so the count keeps creeping up as new nodes are observed.
   let totalNodes = $state(null);
-  const nfmt = new Intl.NumberFormat('en-US');
 
   // The LoRa band a result is on, derived from the first of its networks that
   // declares a radio config. null when unknown (e.g. map-only or radio-less nets).
@@ -667,7 +667,7 @@
     </a>
     {#if !hasQuery}
       <p class="text-dim mt-2">
-        A searchable directory of {#if totalNodes != null}<span class="tabular-nums text-ink">{nfmt.format(totalNodes)}</span>&nbsp;{/if}MeshCore nodes, built from observed signed adverts.
+        A searchable directory of {#if totalNodes != null}<RollingNumber value={totalNodes} />&nbsp;{/if}MeshCore nodes, built from observed signed adverts.
       </p>
     {/if}
   </div>
