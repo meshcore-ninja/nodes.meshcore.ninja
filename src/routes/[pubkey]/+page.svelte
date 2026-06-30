@@ -1336,6 +1336,7 @@
                 {#if radio.networkId}
                   <a
                     href={networkUrl(radio.networkId)}
+                    target="_blank"
                     rel="noreferrer"
                     class="inline-flex hover:opacity-80"
                   >
@@ -1620,6 +1621,7 @@
                       <a
                         {...props}
                         href={networkUrl(n.id)}
+                        target="_blank"
                         rel="noreferrer"
                         class="group flex flex-col gap-1 rounded-lg bg-elev px-3 py-2 outline-none transition-colors hover:bg-elev2 focus-visible:ring-1 focus-visible:ring-accent sm:flex-row sm:items-center sm:gap-2.5"
                       >
@@ -1899,7 +1901,7 @@
           <tbody class="divide-y divide-edge">
             {#each advertGroups as group, groupIndex (group.key)}
               {@const a = group.first}
-              {@const prevGroup = advertGroups[groupIndex - 1]}
+              {@const prevGroup = advertGroups[groupIndex + 1]}
               {@const diff = advertDiff(a, prevGroup?.first, group, prevGroup)}
               {@const canExpand = group.adverts.length > 1}
               {@const expanded = canExpand && expandedAdvertGroups.has(group.key)}
@@ -1907,7 +1909,7 @@
                 class="cursor-pointer hover:bg-elev"
                 onclick={() => openAdvertDetails(a, group)}
               >
-                <td class={diffCellClass(diff.received, 'px-3 py-2 whitespace-nowrap text-xs')} title={fmtTime(a.at)}>
+                <td class="px-3 py-2 whitespace-nowrap text-xs text-muted" title={fmtTime(a.at)}>
                   <span class="inline-flex items-center gap-1.5">
                     {#if canExpand}
                       <button
@@ -1926,14 +1928,14 @@
                     {fmtAgo(a.at)}
                   </span>
                 </td>
-                <td class={diffCellClass(diff.hash, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>
+                <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-muted">
                   {#if group.hash}
-                    <span class={diffValueClass(diff.hash, 'font-mono')} title={group.hash}>{shortHash(group.hash)}</span>
+                    <span class="font-mono" title={group.hash}>{shortHash(group.hash)}</span>
                   {:else}
                     <span class="text-muted">—</span>
                   {/if}
                 </td>
-                <td class={diffCellClass(diff.advertTime, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>{fmtTime(a.advertTime)}</td>
+                <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-muted">{fmtTime(a.advertTime)}</td>
                 <td class={diffCellClass(diff.name, 'px-3 py-2 max-w-[16rem] truncate')} title={a.name}>{a.name || '—'}</td>
                 <td class={diffCellClass(diff.type, 'px-3 py-2 whitespace-nowrap')}>
                   <span title={TYPE_LABEL[a.type]} aria-label={TYPE_LABEL[a.type]}>
@@ -1941,24 +1943,23 @@
                   </span>
                 </td>
                 <td class={diffCellClass(diff.location, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>{a.hasGps ? fmtCoords(a.lat, a.lon) : '—'}</td>
-                <td class={diffCellClass(diff.network, 'px-3 py-2 whitespace-nowrap text-xs')}>
+                <td class="px-3 py-2 whitespace-nowrap text-xs text-muted">
                   {#if a.networkId}
                     <a
                       class="inline-flex hover:opacity-80"
                       href={networkUrl(a.networkId)}
+                      target="_blank"
                       onclick={(event) => event.stopPropagation()}
                       rel="noreferrer"
                     >
-                      <span class={diff.network ? '' : 'opacity-60'}>
-                        <NetworkPill id={a.networkId} {catalog} />
-                      </span>
+                      <NetworkPill id={a.networkId} {catalog} />
                     </a>
                   {:else}—{/if}
                 </td>
-                <td class={diffCellClass(diff.analyzer, 'px-3 py-2 whitespace-nowrap text-xs')}>
+                <td class="px-3 py-2 whitespace-nowrap text-xs text-muted">
                   {#if groupAnalyzerPacketUrl(group)}
                     <a
-                      class={diffValueClass(diff.analyzer, 'hover:underline')}
+                      class="hover:underline"
                       href={groupAnalyzerPacketUrl(group)}
                       onclick={(event) => event.stopPropagation()}
                       target="_blank"
@@ -1967,10 +1968,10 @@
                       {analyzerGroupLabel(group)}
                     </a>
                   {:else}
-                    <span class={diffValueClass(diff.analyzer)}>{analyzerGroupLabel(group)}</span>
+                    <span>{analyzerGroupLabel(group)}</span>
                   {/if}
                 </td>
-                <td class={diffCellClass(diff.observer, 'px-3 py-2 whitespace-nowrap text-xs')}>{observerLabel(group)}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-xs text-muted">{observerLabel(group)}</td>
               </tr>
               {#if canExpand && expanded}
                 {#each group.adverts as detail, detailIndex (`${group.key}-${detailIndex}`)}
@@ -2001,6 +2002,7 @@
                         <a
                           class="inline-flex hover:opacity-80"
                           href={networkUrl(detail.networkId)}
+                          target="_blank"
                           onclick={(event) => event.stopPropagation()}
                           rel="noreferrer"
                         >
@@ -2179,6 +2181,7 @@
                       <a
                         class="inline-flex items-center gap-1.5 text-accent2 hover:underline"
                         href={networkUrl(selectedAdvert.networkId)}
+                        target="_blank"
                         rel="noreferrer"
                       >
                         <Flag code={netFlagCode(selectedAdvert.networkId)} class="h-3.5 w-5" />
@@ -2275,6 +2278,7 @@
                               <a
                                 class="inline-flex items-center gap-1.5 text-accent2 hover:underline"
                                 href={networkUrl(obs.networkId)}
+                                target="_blank"
                                 rel="noreferrer"
                               >
                                 <Flag code={netFlagCode(obs.networkId)} class="h-3.5 w-5" />

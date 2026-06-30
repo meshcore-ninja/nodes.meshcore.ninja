@@ -1,14 +1,22 @@
 <script>
+  import { onMount } from 'svelte';
   import '../app.css';
   import { base } from '$app/paths';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
+  import { Tooltip } from 'bits-ui';
+  import { nodeCount, search } from '$lib/api.js';
+  import { onNewNode } from '$lib/newNodes.js';
   import { focusSearchInput } from '$lib/search.js';
   import ShortcutHint from '$lib/ShortcutHint.svelte';
+  import RollingNumber from '$lib/RollingNumber.svelte';
 
   let { children } = $props();
 
   let theme = $state('dark');
+  let totalNodes = $state(null);
+  let nodeOverview = $state([]);
+  let nodeOverviewLoading = $state(false);
   $effect(() => {
     theme = document.documentElement.getAttribute('data-theme') || 'dark';
   });
@@ -39,7 +47,105 @@
       openSearch();
     }
   }
+
+  async function countFor(filters) {
+    const d = await search({ filters, limit: 1 });
+    return d.total ?? 0;
+  }
+
+  async function refreshNodeOverview() {
+    nodeOverviewLoading = true;
+    try {
+      const rows = [
+        { group: 'Source', label: 'Signed adverts', filters: [{ key: 'source', value: 'advert' }] },
+        { group: 'Source', label: 'Unsigned map', filters: [{ key: 'source', value: 'map' }] },
+        { group: 'Source', label: 'CoreScope', filters: [{ key: 'source', value: 'corescope' }] },
+        { group: 'Type', label: 'Repeaters', filters: [{ key: 'type', value: 'repeater' }] },
+        { group: 'Type', label: 'Companions', filters: [{ key: 'type', value: 'companion' }] },
+        { group: 'Type', label: 'Rooms', filters: [{ key: 'type', value: 'room' }] },
+        { group: 'Type', label: 'Sensors', filters: [{ key: 'type', value: 'sensor' }] },
+        { group: 'Freshness', label: 'Last 24h', filters: [{ key: 'seen', value: '<24h' }] },
+        { group: 'Freshness', label: 'Last 7d', filters: [{ key: 'seen', value: '<7d' }] },
+        { group: 'Freshness', label: 'Older than 30d', filters: [{ key: 'seen', value: '>30d' }] },
+        { group: 'Data', label: 'With location', filters: [{ key: 'has', value: 'location' }] },
+        { group: 'Data', label: 'With name', filters: [{ key: 'has', value: 'name' }] }
+      ];
+      const counts = await Promise.allSettled(rows.map((row) => countFor(row.filters)));
+      nodeOverview = rows.map((row, i) => ({
+        group: row.group,
+        label: row.label,
+        value: counts[i].status === 'fulfilled' ? counts[i].value : null
+      }));
+    } catch {
+      nodeOverview = [];
+    } finally {
+      nodeOverviewLoading = false;
+    }
+  }
+
+  onMount(() => {
+    let stop = false;
+    const refreshCount = async () => {
+      const n = await nodeCount();
+      if (!stop && n != null) totalNodes = n;
+    };
+    refreshCount();
+    refreshNodeOverview();
+    const countTimer = setInterval(refreshCount, 30000);
+    const stopWatch = onNewNode(() => {
+      if (totalNodes != null) totalNodes += 1;
+    });
+    return () => {
+      stop = true;
+      clearInterval(countTimer);
+      stopWatch();
+    };
+  });
 </script>
+
+{#snippet nodeCountTooltip()}
+  <Tooltip.Portal>
+    <Tooltip.Content
+      side="bottom"
+      sideOffset={8}
+      class="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-md border border-edge bg-elev2 px-3 py-3 text-xs text-ink shadow-lg shadow-black/30"
+    >
+      <div class="mb-2 flex items-baseline justify-between gap-3">
+        <div class="font-semibold">Directory overview</div>
+        {#if totalNodes != null}
+          <div class="font-mono text-muted">{totalNodes.toLocaleString()} total</div>
+        {/if}
+      </div>
+      {#if nodeOverviewLoading && !nodeOverview.length}
+        <div class="space-y-1.5">
+          {#each [1, 2, 3, 4, 5] as _}
+            <div class="h-3 animate-pulse rounded bg-edge/70"></div>
+          {/each}
+        </div>
+      {:else if nodeOverview.length}
+        <table class="w-full border-separate border-spacing-0 overflow-hidden rounded border border-edge/80 text-left">
+          <tbody>
+            {#each nodeOverview as row, i (`${row.group}-${row.label}`)}
+              <tr class={i % 2 ? 'bg-bg/40' : 'bg-bg/70'}>
+                <td class="w-20 px-2 py-1 text-[10px] uppercase tracking-wide text-muted">{row.group}</td>
+                <td class="px-2 py-1 text-dim">{row.label}</td>
+                <td class="px-2 py-1 text-right font-mono text-ink">
+                  {row.value == null ? '—' : row.value.toLocaleString()}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <p class="mt-2 text-[11px] leading-relaxed text-muted">
+          Rows overlap: a node can be counted by source, type, freshness, and data completeness.
+        </p>
+      {:else}
+        <p class="text-muted">{nodeOverviewLoading ? 'Loading overview…' : 'Overview is not available right now.'}</p>
+      {/if}
+      <Tooltip.Arrow class="text-edge" />
+    </Tooltip.Content>
+  </Tooltip.Portal>
+{/snippet}
 
 <svelte:window {onkeydown} />
 
@@ -64,14 +170,29 @@
             <span class="hidden text-xs sm:inline"><ShortcutHint /></span>
           </button>
         </div>
-        <button
-          type="button"
-          onclick={toggleTheme}
-          class="shrink-0 cursor-pointer rounded-md border border-edge bg-bg px-2 py-1 text-sm text-dim hover:border-accent hover:text-ink"
-          aria-label="Toggle theme"
-        >
-          {theme === 'dark' ? '☀' : '☾'}
-        </button>
+        <div class="flex shrink-0 items-center gap-2">
+          {#if totalNodes != null}
+            <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
+              <Tooltip.Root>
+                <Tooltip.Trigger
+                  class="hidden items-center gap-1.5 rounded-md border border-edge bg-bg px-2.5 py-1.5 text-xs text-dim outline-none hover:border-accent hover:text-ink focus-visible:ring-1 focus-visible:ring-accent sm:inline-flex"
+                >
+                  <span class="font-semibold text-ink"><RollingNumber value={totalNodes} /></span>
+                  <span>nodes</span>
+                </Tooltip.Trigger>
+                {@render nodeCountTooltip()}
+              </Tooltip.Root>
+            </Tooltip.Provider>
+          {/if}
+          <button
+            type="button"
+            onclick={toggleTheme}
+            class="shrink-0 cursor-pointer rounded-md border border-edge bg-bg px-2 py-1 text-sm text-dim hover:border-accent hover:text-ink"
+            aria-label="Toggle theme"
+          >
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
+        </div>
       </div>
     </header>
   {:else}
@@ -94,13 +215,13 @@
     <div class="mx-auto max-w-6xl px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <span class="text-center sm:text-left">
         Powered by
-        <a class="foot-link" href="https://tangleveil.meshcore.ninja/" rel="noreferrer">Tangleveil</a>
+        <a class="foot-link" href="https://tangleveil.meshcore.ninja/" target="_blank" rel="noreferrer">⋈ Tangleveil</a>
         ·
-        <a class="foot-link" href="https://github.com/meshcore-ninja/nodes.meshcore.ninja" rel="noreferrer">source code</a>
+        <a class="foot-link" href="https://github.com/meshcore-ninja/nodes.meshcore.ninja" target="_blank" rel="noreferrer">source code</a>
       </span>
       <div class="flex items-center justify-center gap-4 sm:justify-end">
-        <a class="foot-link" href="https://meshcore.ninja" rel="noreferrer">meshcore.ninja <span class="arrow">↗</span></a>
-        <a class="foot-link" href="https://map.meshcore.ninja" rel="noreferrer">Map <span class="arrow">↗</span></a>
+        <a class="foot-link" href="https://meshcore.ninja" target="_blank" rel="noreferrer">meshcore.ninja <span class="arrow">↗</span></a>
+        <a class="foot-link" href="https://map.meshcore.ninja" target="_blank" rel="noreferrer">Map <span class="arrow">↗</span></a>
       </div>
     </div>
   </footer>

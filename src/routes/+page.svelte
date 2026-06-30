@@ -29,6 +29,8 @@
   // Total nodes in the directory, shown in the tagline. Refreshed on a slow
   // interval so the count keeps creeping up as new nodes are observed.
   let totalNodes = $state(null);
+  let nodeOverview = $state([]);
+  let nodeOverviewLoading = $state(false);
 
   // The LoRa band a result is on, derived from the first of its networks that
   // declares a radio config. null when unknown (e.g. map-only or radio-less nets).
@@ -647,6 +649,41 @@
     return `${Math.round(ms)} ms`;
   }
 
+  async function countFor(filters) {
+    const d = await search({ filters, limit: 1 });
+    return d.total ?? 0;
+  }
+
+  async function refreshNodeOverview() {
+    nodeOverviewLoading = true;
+    try {
+      const rows = [
+        { group: 'Source', label: 'Signed adverts', filters: [{ key: 'source', value: 'advert' }] },
+        { group: 'Source', label: 'Unsigned map', filters: [{ key: 'source', value: 'map' }] },
+        { group: 'Source', label: 'CoreScope', filters: [{ key: 'source', value: 'corescope' }] },
+        { group: 'Type', label: 'Repeaters', filters: [{ key: 'type', value: 'repeater' }] },
+        { group: 'Type', label: 'Companions', filters: [{ key: 'type', value: 'companion' }] },
+        { group: 'Type', label: 'Rooms', filters: [{ key: 'type', value: 'room' }] },
+        { group: 'Type', label: 'Sensors', filters: [{ key: 'type', value: 'sensor' }] },
+        { group: 'Freshness', label: 'Last 24h', filters: [{ key: 'seen', value: '<24h' }] },
+        { group: 'Freshness', label: 'Last 7d', filters: [{ key: 'seen', value: '<7d' }] },
+        { group: 'Freshness', label: 'Older than 30d', filters: [{ key: 'seen', value: '>30d' }] },
+        { group: 'Data', label: 'With location', filters: [{ key: 'has', value: 'location' }] },
+        { group: 'Data', label: 'With name', filters: [{ key: 'has', value: 'name' }] }
+      ];
+      const counts = await Promise.allSettled(rows.map((row) => countFor(row.filters)));
+      nodeOverview = rows.map((row, i) => ({
+        group: row.group,
+        label: row.label,
+        value: counts[i].status === 'fulfilled' ? counts[i].value : null
+      }));
+    } catch {
+      nodeOverview = [];
+    } finally {
+      nodeOverviewLoading = false;
+    }
+  }
+
   onMount(() => {
     requestAnimationFrame(() => searchInput?.focus());
 
@@ -659,6 +696,7 @@
       if (!stop && n != null) totalNodes = n;
     };
     refreshCount();
+    refreshNodeOverview();
     const countTimer = setInterval(refreshCount, 30000);
     const stopWatch = onNewNode(() => {
       if (totalNodes != null) totalNodes += 1;
@@ -684,6 +722,50 @@
   </Tooltip.Portal>
 {/snippet}
 
+{#snippet nodeCountTooltip()}
+  <Tooltip.Portal>
+    <Tooltip.Content
+      side="top"
+      sideOffset={8}
+      class="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-md border border-edge bg-elev2 px-3 py-3 text-xs text-ink shadow-lg shadow-black/30"
+    >
+      <div class="mb-2 flex items-baseline justify-between gap-3">
+        <div class="font-semibold">Directory overview</div>
+        {#if totalNodes != null}
+          <div class="font-mono text-muted">{totalNodes.toLocaleString()} total</div>
+        {/if}
+      </div>
+      {#if nodeOverviewLoading && !nodeOverview.length}
+        <div class="space-y-1.5">
+          {#each [1, 2, 3, 4, 5] as _}
+            <div class="h-3 animate-pulse rounded bg-edge/70"></div>
+          {/each}
+        </div>
+      {:else if nodeOverview.length}
+        <table class="w-full border-separate border-spacing-0 overflow-hidden rounded border border-edge/80 text-left">
+          <tbody>
+            {#each nodeOverview as row, i (`${row.group}-${row.label}`)}
+              <tr class={i % 2 ? 'bg-bg/40' : 'bg-bg/70'}>
+                <td class="w-20 px-2 py-1 text-[10px] uppercase tracking-wide text-muted">{row.group}</td>
+                <td class="px-2 py-1 text-dim">{row.label}</td>
+                <td class="px-2 py-1 text-right font-mono text-ink">
+                  {row.value == null ? '—' : row.value.toLocaleString()}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <p class="mt-2 text-[11px] leading-relaxed text-muted">
+          Rows overlap: a node can be counted by source, type, freshness, and data completeness.
+        </p>
+      {:else}
+        <p class="text-muted">{nodeOverviewLoading ? 'Loading overview…' : 'Overview is not available right now.'}</p>
+      {/if}
+      <Tooltip.Arrow class="text-edge" />
+    </Tooltip.Content>
+  </Tooltip.Portal>
+{/snippet}
+
 <svelte:head>
   <title>MeshCore Nodes — search the mesh</title>
 </svelte:head>
@@ -693,18 +775,28 @@
   class:pt-[18vh]={!hasQuery}
   class:pt-10={hasQuery}
 >
-  <div class="text-center mb-6" class:mb-3={hasQuery}>
-    <a href="{base}/" class="inline-flex items-center gap-2 text-2xl font-semibold tracking-tight">
-      <span class="text-accent"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-dot-icon lucide-circle-dot"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg></span> nodes.meshcore.ninja
-    </a>
-    {#if !hasQuery}
-      <p class="text-dim mt-2">
-        A searchable directory of {#if totalNodes != null}<RollingNumber value={totalNodes} />&nbsp;{/if}MeshCore nodes, built from observed signed adverts.
-      </p>
-    {/if}
-  </div>
-
   <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
+    <div class="text-center mb-6" class:mb-3={hasQuery}>
+      <a href="{base}/" class="inline-flex items-center gap-2 text-2xl font-semibold tracking-tight">
+        <span class="text-accent"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-dot-icon lucide-circle-dot"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg></span> nodes.meshcore.ninja
+      </a>
+      {#if !hasQuery}
+        <p class="text-dim mt-2">
+          A searchable directory of
+          {#if totalNodes != null}
+            <Tooltip.Root>
+              <Tooltip.Trigger
+                class="inline-flex align-baseline font-semibold text-ink decoration-dotted underline-offset-4 outline-none hover:text-accent hover:underline focus-visible:rounded focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <RollingNumber value={totalNodes} />
+              </Tooltip.Trigger>
+              {@render nodeCountTooltip()}
+            </Tooltip.Root>&nbsp;
+          {/if}MeshCore nodes, built from observed signed adverts.
+        </p>
+      {/if}
+    </div>
+
     <Command.Root
       label="Search nodes"
       shouldFilter={false}
@@ -823,19 +915,22 @@
               <X size={18} />
             </button>
           {/if}
-          <button
-            type="button"
-            class="grid h-10 w-10 place-items-center rounded-lg border border-edge text-dim transition hover:border-accent hover:text-accent disabled:cursor-wait disabled:opacity-60"
-            title={locating ? 'Getting current location' : 'Use current location'}
-            aria-label={locating ? 'Getting current location' : 'Use current location'}
-            disabled={locating}
-            onclick={(event) => {
-              event.stopPropagation();
-              useCurrentLocation();
-            }}
-          >
-            <LocateFixed size={18} class={locating ? 'animate-spin' : ''} />
-          </button>
+          <Tooltip.Root>
+            <Tooltip.Trigger
+              type="button"
+              class="grid h-10 w-10 place-items-center rounded-lg border border-edge text-dim transition hover:border-accent hover:text-accent disabled:cursor-wait disabled:opacity-60"
+              title={locating ? 'Getting current location' : 'Use current location'}
+              aria-label={locating ? 'Getting current location' : 'Use current location'}
+              disabled={locating}
+              onclick={(event) => {
+                event.stopPropagation();
+                useCurrentLocation();
+              }}
+            >
+              <LocateFixed size={18} class={locating ? 'animate-spin' : ''} />
+            </Tooltip.Trigger>
+            {@render badgeTooltip('Use your browser location to add a near:<lat,lon> filter and sort results by distance. Your location is only used in this search box.')}
+          </Tooltip.Root>
           {#if hasSearchEntry}
             <button
               type="button"

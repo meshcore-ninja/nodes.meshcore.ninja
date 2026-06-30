@@ -47,6 +47,10 @@
   let following = $state(true);
   let unseenCount = $state(0); // new adverts arrived while scrolled away
   let pinning = false; // a programmatic scroll-to-top is in flight
+  let overflowing = $state(false); // more rows than fit the viewport
+  let atBottom = $state(false); // scrolled to the very end of the list
+  // The bottom fade only makes sense when there's hidden content below it.
+  const showBottomFade = $derived(overflowing && !atBottom);
 
   // Incoming frames can arrive in bursts (especially right after connect); we
   // buffer them here and let `release()` drip them into the visible list one at
@@ -150,17 +154,28 @@
 
     adverts = [next, ...adverts].slice(0, MAX);
 
-    if (hold) {
-      unseenCount += 1;
-      tick().then(() => {
-        if (scroller && anchorEl?.isConnected) {
-          scroller.scrollTop = anchorEl.offsetTop - anchorOffset;
-        }
-      });
+    if (hold) unseenCount += 1;
+    tick().then(() => {
+      if (hold && scroller && anchorEl?.isConnected) {
+        scroller.scrollTop = anchorEl.offsetTop - anchorOffset;
+      }
+      updateMetrics();
+    });
+  }
+
+  function updateMetrics() {
+    const sc = scroller;
+    if (!sc) {
+      overflowing = false;
+      atBottom = false;
+      return;
     }
+    overflowing = sc.scrollHeight > sc.clientHeight + 1;
+    atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight <= 4;
   }
 
   function onFeedScroll() {
+    updateMetrics();
     const atTop = (scroller?.scrollTop ?? 0) <= 8;
     // While the button-driven scroll is animating to the top, ignore the
     // intermediate positions it passes through — only the arrival matters.
@@ -198,6 +213,7 @@
     const stopNew = onNewNode();
     const pump = setInterval(release, RELEASE_MS);
     const tick = setInterval(() => (now = Date.now() / 1000), 1000);
+    requestAnimationFrame(updateMetrics); // restored feed may already overflow
     return () => {
       destroyed = true;
       stopNew();
@@ -264,6 +280,13 @@
             : 'Follow latest'}
         </button>
       {/if}
+      <!-- Bottom fade: a gradient overlay (rather than a CSS mask) so it can
+           ease in/out instead of snapping when the list starts/stops overflowing. -->
+      <div
+        class="pointer-events-none absolute inset-x-0 bottom-0 h-[5.5rem] rounded-b-xl bg-gradient-to-t from-bg to-transparent transition-opacity duration-300"
+        class:opacity-0={!showBottomFade}
+        aria-hidden="true"
+      ></div>
       <ul
         bind:this={scroller}
         onscroll={onFeedScroll}
@@ -272,7 +295,7 @@
       {#each adverts as a, i (a.key)}
         {@const isNew = newNodeKeys.has(a.pubkey)}
         <li
-          class:fresh={now - a.at < 6}
+          class:fresh={!isNew && now - a.at < 6}
           class:new-node={isNew}
           in:reveal
         >
@@ -286,7 +309,7 @@
                 <span class="truncate font-medium">{a.name}</span>
                 {#if isNew}
                   <span
-                    class="new-badge shrink-0 rounded-full border border-accent/50 bg-accent/15 px-1.5 py-px text-[0.6rem] font-semibold uppercase tracking-wide text-accent"
+                    class="new-badge shrink-0 rounded-full border border-[#f0c14b]/60 bg-[#f0c14b]/20 px-1.5 py-px text-[0.6rem] font-semibold uppercase tracking-wide text-[#f0c14b]"
                     title="First time this node has ever been observed"
                   >
                     ✦ New
@@ -334,8 +357,6 @@
     overflow-anchor: none;
     scrollbar-width: none;
     -ms-overflow-style: none;
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.75rem), transparent);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 2.75rem), transparent);
   }
 
   .adverts-scroll::-webkit-scrollbar {
@@ -365,15 +386,24 @@
     }
   }
 
-  /* A first-ever-seen node: a persistent accent edge (outlives the green fresh
-     wash) marks it as genuinely new to the mesh, not just recently heard. */
+  /* A first-ever-seen node gets the full golden treatment — a thick gold edge,
+     a gold-tinted fill, a gold hairline border and an outer glow — so it stands
+     out unmistakably from merely-recent rows. */
   .new-node {
-    box-shadow: inset 3px 0 0 var(--color-accent);
-    background-color: color-mix(in srgb, var(--color-accent) 7%, transparent);
+    background-color: color-mix(in srgb, #f0c14b 13%, transparent);
+    box-shadow:
+      inset 3px 0 0 #f0c14b,
+      inset 0 0 0 1px color-mix(in srgb, #f0c14b 45%, transparent),
+      0 0 18px color-mix(in srgb, #f0c14b 24%, transparent);
+  }
+
+  .new-node:hover {
+    background-color: color-mix(in srgb, #f0c14b 18%, transparent);
   }
 
   .new-badge {
     animation: new-badge-in 0.5s ease-out;
+    box-shadow: 0 0 10px color-mix(in srgb, #f0c14b 40%, transparent);
   }
 
   @keyframes new-badge-in {
