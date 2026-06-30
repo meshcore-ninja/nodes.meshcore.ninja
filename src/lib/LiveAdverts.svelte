@@ -13,13 +13,14 @@
   // pre-filter to ADVERT packets and to dedup the same packet seen by many
   // observers (`?payloadTypes=ADVERT&dedupByContent`), so the client just renders
   // what arrives — no parsing/filtering load here. New adverts fly in at the top.
-  import { onMount } from 'svelte';
-  import { flip } from 'svelte/animate';
-  import { fly } from 'svelte/transition';
+  import { onMount, tick } from 'svelte';
+  import { fly, slide } from 'svelte/transition';
+  import { ArrowUp } from '@lucide/svelte';
   import { base } from '$app/paths';
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NetworkPill from '$lib/NetworkPill.svelte';
   import { meshNetworks } from '$lib/api.js';
+  import { newNodeKeys, onNewNode } from '$lib/newNodes.js';
   import { TYPE_LABEL, fmtAgo, shortKey, fmtCoords } from '$lib/format.js';
 
   // Network catalog (id → details), for resolving the observing network's name +
@@ -31,13 +32,21 @@
     import.meta.env?.VITE_TANGLEVEIL_WS || 'wss://tangleveil.meshcore.ninja/ws'
   ).replace(/\/+$/, '');
 
-  const MAX = 8; // rolling window of most-recent adverts
+  const MAX = 100; // rolling window of most-recent adverts (scroll to see history)
   const RELEASE_MS = 500; // throttle: release at most one queued advert per tick
   const MAX_QUEUE = 40; // cap the backlog so a burst can't pile up unbounded
 
   let adverts = $state(savedAdverts); // resume from the last session if any
   let status = $state('connecting'); // 'connecting' | 'live' | 'offline'
   let now = $state(Date.now() / 1000);
+
+  // Scroll/follow state: the feed "follows latest" while pinned to the top
+  // (newest first). Once the user scrolls down into history we stop following,
+  // hold their position as new rows prepend, and offer a button to jump back.
+  let scroller = $state(null);
+  let following = $state(true);
+  let unseenCount = $state(0); // new adverts arrived while scrolled away
+  let pinning = false; // a programmatic scroll-to-top is in flight
 
   // Incoming frames can arrive in bursts (especially right after connect); we
   // buffer them here and let `release()` drip them into the visible list one at
@@ -123,15 +132,75 @@
     if (!queue.length) return;
     const next = queue.shift();
     next.at = Date.now() / 1000;
+
+    // While the user is reading history, hold their view steady as the new row
+    // prepends (otherwise the content would slide down under them) and tally the
+    // unseen arrivals for the "follow latest" button. We anchor to the current
+    // top row's element — keyed, so it survives the update — and restore its
+    // viewport offset afterwards. (Native overflow-anchor is disabled in CSS so
+    // it can't fight this; when following, prepending at scrollTop 0 just stays.)
+    const sc = scroller;
+    const hold = !following && sc;
+    let anchorEl = null;
+    let anchorOffset = 0;
+    if (hold) {
+      anchorEl = sc.querySelector('li');
+      if (anchorEl) anchorOffset = anchorEl.offsetTop - sc.scrollTop;
+    }
+
     adverts = [next, ...adverts].slice(0, MAX);
+
+    if (hold) {
+      unseenCount += 1;
+      tick().then(() => {
+        if (scroller && anchorEl?.isConnected) {
+          scroller.scrollTop = anchorEl.offsetTop - anchorOffset;
+        }
+      });
+    }
+  }
+
+  function onFeedScroll() {
+    const atTop = (scroller?.scrollTop ?? 0) <= 8;
+    // While the button-driven scroll is animating to the top, ignore the
+    // intermediate positions it passes through — only the arrival matters.
+    if (pinning) {
+      if (atTop) {
+        pinning = false;
+        following = true;
+        unseenCount = 0;
+      }
+      return;
+    }
+    following = atTop;
+    if (atTop) unseenCount = 0;
+  }
+
+  function followLatest() {
+    following = true;
+    unseenCount = 0;
+    pinning = true;
+    scroller?.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Entrance for a new row. A height `slide` reveals it without leaving the gap
+  // a translate (`fly`) would. Only animate while following — when the user is
+  // reading history we insert instantly so the scroll-anchor math (which assumes
+  // the row's full height is present) stays exact and the view doesn't drift.
+  function reveal(node, params) {
+    return following ? slide(node, { duration: 220 }) : { duration: 0 };
   }
 
   onMount(() => {
     connect();
+    // Keep the shared /api/live socket alive while the feed is shown, so newly
+    // observed pubkeys land in `newNodeKeys` and matching rows light up.
+    const stopNew = onNewNode();
     const pump = setInterval(release, RELEASE_MS);
     const tick = setInterval(() => (now = Date.now() / 1000), 1000);
     return () => {
       destroyed = true;
+      stopNew();
       // Stash the current feed so a remount resumes where we left off.
       savedAdverts = adverts;
       savedSeq = seq;
@@ -181,13 +250,31 @@
       {/if}
     </div>
   {:else}
-    <ul class="divide-y divide-edge overflow-hidden rounded-xl border border-edge bg-gradient-to-b from-elev/50 to-transparent">
+    <div class="relative">
+      {#if !following}
+        <button
+          type="button"
+          onclick={followLatest}
+          transition:fly={{ y: -8, duration: 200 }}
+          class="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/50 bg-accent px-3 py-1.5 text-xs font-medium text-bg shadow-lg shadow-black/30 transition hover:brightness-110"
+        >
+          <ArrowUp size={14} />
+          {unseenCount > 0
+            ? `${unseenCount} new advert${unseenCount === 1 ? '' : 's'}`
+            : 'Follow latest'}
+        </button>
+      {/if}
+      <ul
+        bind:this={scroller}
+        onscroll={onFeedScroll}
+        class="adverts-scroll divide-y divide-edge rounded-xl border border-edge bg-gradient-to-b from-elev/50 to-transparent"
+      >
       {#each adverts as a, i (a.key)}
+        {@const isNew = newNodeKeys.has(a.pubkey)}
         <li
-          class:last-row-fade={i === adverts.length - 1}
           class:fresh={now - a.at < 6}
-          animate:flip={{ duration: 250 }}
-          in:fly={{ y: -10, duration: 300 }}
+          class:new-node={isNew}
+          in:reveal
         >
           <a
             href="{base}/{a.pubkey}"
@@ -197,6 +284,14 @@
             <span class="min-w-0 flex-1">
               <span class="flex items-center gap-1.5">
                 <span class="truncate font-medium">{a.name}</span>
+                {#if isNew}
+                  <span
+                    class="new-badge shrink-0 rounded-full border border-accent/50 bg-accent/15 px-1.5 py-px text-[0.6rem] font-semibold uppercase tracking-wide text-accent"
+                    title="First time this node has ever been observed"
+                  >
+                    ✦ New
+                  </span>
+                {/if}
                 <span class="shrink-0 text-xs capitalize text-muted">{TYPE_LABEL[a.type]}</span>
               </span>
               <span class="flex items-center gap-2">
@@ -222,14 +317,29 @@
           </a>
         </li>
       {/each}
-    </ul>
+      </ul>
+    </div>
   {/if}
 </section>
 
 <style>
-  .last-row-fade {
-    -webkit-mask-image: linear-gradient(to bottom, #000 35%, transparent);
-    mask-image: linear-gradient(to bottom, #000 35%, transparent);
+  /* Scrollable feed that keeps up to MAX rows of history. Scrollbars are hidden
+     and the bottom edge fades, so older rows dissolve into "there's more below"
+     rather than ending in a hard line. */
+  .adverts-scroll {
+    max-height: 30rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    overflow-anchor: none;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.75rem), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 2.75rem), transparent);
+  }
+
+  .adverts-scroll::-webkit-scrollbar {
+    display: none;
   }
 
   /* A new advert lands with a green wash + accent edge that fades out over a few
@@ -251,6 +361,37 @@
 
   @media (prefers-reduced-motion: reduce) {
     .fresh {
+      animation: none;
+    }
+  }
+
+  /* A first-ever-seen node: a persistent accent edge (outlives the green fresh
+     wash) marks it as genuinely new to the mesh, not just recently heard. */
+  .new-node {
+    box-shadow: inset 3px 0 0 var(--color-accent);
+    background-color: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  }
+
+  .new-badge {
+    animation: new-badge-in 0.5s ease-out;
+  }
+
+  @keyframes new-badge-in {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.12);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .new-badge {
       animation: none;
     }
   }

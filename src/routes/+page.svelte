@@ -4,12 +4,13 @@
 
 <script>
   import { onMount } from 'svelte';
-  import { Command } from 'bits-ui';
-  import { LoaderCircle, LocateFixed, Search as SearchIcon, X } from '@lucide/svelte';
+  import { Command, Tooltip } from 'bits-ui';
+  import { LoaderCircle, LocateFixed, Search as SearchIcon, ShieldAlert, X } from '@lucide/svelte';
   import { base } from '$app/paths';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { search, searchOptions, meshNetworks, bands, nodeCount } from '$lib/api.js';
+  import { onNewNode } from '$lib/newNodes.js';
   import { focusSearchInput } from '$lib/search.js';
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NetworkPill from '$lib/NetworkPill.svelte';
@@ -132,9 +133,14 @@
   }
 
   function sourceLabel(source) {
-    if (source === 'map') return 'map-only';
+    if (source === 'map') return 'unsigned map entry';
     if (source === 'corescope') return 'CoreScope';
     return 'observed advert';
+  }
+
+  function recencyLabel(n) {
+    const ago = fmtAgo(n.lastAdvertAt);
+    return n.source === 'map' ? `map publish ${ago}` : ago;
   }
 
   function networkCountries(n) {
@@ -187,7 +193,13 @@
       const matched = networkRegions(n).filter((r) => wanted.has(r));
       if (matched.length) items.push({ key: 'region', label: 'Region', value: matched.join(', ') });
     }
-    if (hasFilter('seen')) items.push({ key: 'seen', label: 'Seen', value: fmtAgo(n.lastAdvertAt) });
+    if (hasFilter('seen')) {
+      items.push({
+        key: 'seen',
+        label: n.source === 'map' ? 'Map publish' : 'Seen',
+        value: fmtAgo(n.lastAdvertAt)
+      });
+    }
     if (hasFilter('has')) {
       if (filterValues('has').includes('location')) {
         items.push({ key: 'has-location', label: 'Location', value: n.hasGps ? fmtCoords(n.lat, n.lon) : 'missing' });
@@ -638,19 +650,39 @@
   onMount(() => {
     requestAnimationFrame(() => searchInput?.focus());
 
+    // Seed the total from the directory, then keep it authoritative on a slow
+    // re-sync. Between syncs the live feed ticks it up the instant a brand-new
+    // node is first observed, so the count grows in realtime.
     let stop = false;
     const refreshCount = async () => {
       const n = await nodeCount();
       if (!stop && n != null) totalNodes = n;
     };
     refreshCount();
-    const countTimer = setInterval(refreshCount, 15000);
+    const countTimer = setInterval(refreshCount, 30000);
+    const stopWatch = onNewNode(() => {
+      if (totalNodes != null) totalNodes += 1;
+    });
     return () => {
       stop = true;
       clearInterval(countTimer);
+      stopWatch();
     };
   });
 </script>
+
+{#snippet badgeTooltip(text)}
+  <Tooltip.Portal>
+    <Tooltip.Content
+      side="top"
+      sideOffset={6}
+      class="z-50 max-w-64 rounded-md border border-edge bg-elev2 px-3 py-2 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+    >
+      {text}
+      <Tooltip.Arrow class="text-edge" />
+    </Tooltip.Content>
+  </Tooltip.Portal>
+{/snippet}
 
 <svelte:head>
   <title>MeshCore Nodes — search the mesh</title>
@@ -672,12 +704,13 @@
     {/if}
   </div>
 
-  <Command.Root
-    label="Search nodes"
-    shouldFilter={false}
-    disableInitialScroll={true}
-    bind:value={selectedValue}
-  >
+  <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
+    <Command.Root
+      label="Search nodes"
+      shouldFilter={false}
+      disableInitialScroll={true}
+      bind:value={selectedValue}
+    >
     <!-- Dominant search input -->
     <div class="relative">
       <div
@@ -982,20 +1015,27 @@
                   <span class="flex items-center gap-1.5">
                     <span class="truncate font-medium">{n.name || '(unnamed)'}</span>
                     {#if n.source === 'map'}
-                      <span
-                        class="shrink-0 rounded-full border border-accent2/40 px-1.5 py-px text-[0.6rem] uppercase tracking-wide text-accent2"
-                        title="Only on map.meshcore.io — not yet observed by our analyzers"
-                      >
-                        Map-only
-                      </span>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger
+                          class="inline-flex shrink-0 items-center gap-1 rounded-full border border-warn/45 bg-warn/10 px-1.5 py-px text-[0.6rem] uppercase tracking-wide text-warn outline-none hover:border-warn/70 hover:bg-warn/15 focus-visible:ring-1 focus-visible:ring-warn"
+                          onclick={(event) => event.preventDefault()}
+                        >
+                          <ShieldAlert size={10} aria-hidden="true" />
+                          Unsigned
+                        </Tooltip.Trigger>
+                        {@render badgeTooltip('Unsigned map entry: mirrored from map.meshcore.io, but not verified here from a captured signed advert yet.')}
+                      </Tooltip.Root>
                     {/if}
                     {#if isStale(n)}
-                      <span
-                        class="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-1.5 py-px text-[0.6rem] uppercase tracking-wide text-warn"
-                        title="No recent advert observed in the last 14 days"
-                      >
-                        Stale
-                      </span>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger
+                          class="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-1.5 py-px text-[0.6rem] uppercase tracking-wide text-warn outline-none hover:border-warn/70 hover:bg-warn/15 focus-visible:ring-1 focus-visible:ring-warn"
+                          onclick={(event) => event.preventDefault()}
+                        >
+                          Stale
+                        </Tooltip.Trigger>
+                        {@render badgeTooltip('No recent signed advert observed in the last 14 days. The node may still exist, but this directory has not heard a fresh advert.')}
+                      </Tooltip.Root>
                     {/if}
                   </span>
                   <span class="block truncate text-xs text-muted font-mono">{shortKey(n.pubkey)}</span>
@@ -1026,7 +1066,7 @@
                       </span>
                     {/if}
                     {#if n.hasGps}<span> · {fmtCoords(n.lat, n.lon)}</span>{/if}
-                    <span> · {fmtAgo(n.lastAdvertAt)}</span>
+                    <span> · {recencyLabel(n)}</span>
                   </span>
                   {#if n.networks?.length}
                     <span class="mt-1 flex flex-wrap items-center gap-1">
@@ -1055,7 +1095,7 @@
                     {/if}
                   </span>
                   {#if n.hasGps}<span class="block">{fmtCoords(n.lat, n.lon)}</span>{/if}
-                  <span class="block">{fmtAgo(n.lastAdvertAt)}</span>
+                  <span class="block">{recencyLabel(n)}</span>
                 </span>
                 <span class="text-muted">→</span>
               </Command.LinkItem>
@@ -1064,7 +1104,8 @@
         {/if}
       </div>
     {/if}
-  </Command.Root>
+    </Command.Root>
+  </Tooltip.Provider>
 
   {#if !hasQuery}
     <LiveAdverts />

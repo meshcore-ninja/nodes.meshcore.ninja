@@ -57,6 +57,98 @@ export function nodeCount(signal) {
     .catch(() => null);
 }
 
+// The API's live advert WebSocket. Each frame is one observed advert carrying a
+// `new` flag — true the first time a node is ever seen — so the client can grow
+// the node count in realtime. Derived from API_BASE unless overridden.
+export const API_LIVE_WS = (
+  import.meta.env?.VITE_API_LIVE_WS ||
+  `${API_BASE.replace(/^http/, 'ws')}/api/live`
+).replace(/\/+$/, '');
+
+/**
+ * Subscribe to first-ever node sightings on the live feed. `onNew` is called
+ * (with the advert) each time a brand-new node appears, so callers can tick a
+ * running count up in realtime. Returns a stop() that closes the socket and
+ * cancels reconnection.
+ * @param {(advert:any)=>void} onNew
+ * @returns {() => void}
+ */
+export function watchNewNodes(onNew) {
+  let ws;
+  let timer;
+  let stopped = false;
+  let backoff = 1000;
+
+  const connect = () => {
+    if (stopped) return;
+    try {
+      ws = new WebSocket(API_LIVE_WS);
+    } catch {
+      schedule();
+      return;
+    }
+    ws.onopen = () => {
+      backoff = 1000;
+    };
+    ws.onmessage = (ev) => {
+      let f;
+      try {
+        f = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (f?.new && f.pubkey) onNew(f);
+    };
+    ws.onerror = () => {
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    };
+    ws.onclose = () => {
+      if (!stopped) schedule();
+    };
+  };
+
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 15000);
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    try {
+      ws?.close();
+    } catch {
+      /* ignore */
+    }
+  };
+}
+
+/**
+ * The most recently discovered nodes (newest first-ever advert). The API has no
+ * first-seen sort, but every observed-node result carries `firstAdvertAt`, and a
+ * freshly-discovered node has just adverted — so it's always near the top of the
+ * recently-active set. We pull the live (`source=advert`) nodes and sort them by
+ * first-seen client-side. Map-only entries are excluded (they carry no
+ * first-advert time).
+ * @param {number} [limit] how many newest nodes to return
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<any[]>}
+ */
+export function newestNodes(limit = 8, signal) {
+  return search({ filters: [{ key: 'source', value: 'advert' }], limit: 150 }, signal).then((d) =>
+    (d.results ?? [])
+      .filter((n) => n.firstAdvertAt > 0)
+      .sort((a, b) => b.firstAdvertAt - a.firstAdvertAt)
+      .slice(0, limit)
+  );
+}
+
 let searchOptionsPromise;
 export function searchOptions(signal) {
   if (!searchOptionsPromise || signal) {

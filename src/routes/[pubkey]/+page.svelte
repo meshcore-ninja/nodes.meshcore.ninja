@@ -4,7 +4,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { Dialog, Tooltip, Select } from 'bits-ui';
-  import { ChevronRight, ChevronDown, X } from '@lucide/svelte';
+  import { ChevronRight, ChevronDown, CircleQuestionMark, ShieldAlert, X } from '@lucide/svelte';
   import { MeshCoreDecoder, Utils } from '@michaelhart/meshcore-decoder';
   import {
     nodeDetail,
@@ -618,6 +618,54 @@
     return `${count} observer${count === 1 ? '' : 's'}`;
   }
 
+  function advertLocationKey(advert) {
+    return advert?.hasGps ? fmtCoords(advert.lat, advert.lon) : '';
+  }
+
+  function advertObserverKey(advert) {
+    return advert?.observerId || advert?.observerName || '';
+  }
+
+  function advertDiff(current, previous, currentGroup = null, previousGroup = null) {
+    if (!previous) {
+      return {
+        received: false,
+        hash: false,
+        advertTime: false,
+        name: false,
+        type: false,
+        location: false,
+        network: false,
+        analyzer: false,
+        observer: false
+      };
+    }
+
+    return {
+      received: fmtAgo(current?.at) !== fmtAgo(previous?.at),
+      hash: (currentGroup?.hash || current?.hash || '') !== (previousGroup?.hash || previous?.hash || ''),
+      advertTime: (current?.advertTime || 0) !== (previous?.advertTime || 0),
+      name: (current?.name || '') !== (previous?.name || ''),
+      type: (current?.type ?? '') !== (previous?.type ?? ''),
+      location: advertLocationKey(current) !== advertLocationKey(previous),
+      network: (current?.networkId || '') !== (previous?.networkId || ''),
+      analyzer: currentGroup
+        ? analyzerGroupLabel(currentGroup) !== analyzerGroupLabel(previousGroup)
+        : analyzerName(current) !== analyzerName(previous),
+      observer: currentGroup
+        ? observerLabel(currentGroup) !== observerLabel(previousGroup)
+        : advertObserverKey(current) !== advertObserverKey(previous)
+    };
+  }
+
+  function diffCellClass(changed, base = '') {
+    return `${base} ${changed ? 'bg-accent/10 text-ink' : 'text-muted opacity-60'}`;
+  }
+
+  function diffValueClass(changed, base = '') {
+    return `${base} ${changed ? 'text-ink' : 'text-muted opacity-60'}`;
+  }
+
   function toggleAdvertGroup(key) {
     const next = new Set(expandedAdvertGroups);
     if (next.has(key)) next.delete(key);
@@ -804,6 +852,13 @@
 
   const bandInfo = $derived(radio?.band ? (bandCatalog[radio.band] ?? null) : null);
 
+  function fmtCodingRate(cr) {
+    if (cr == null || cr === '') return '—';
+    const s = String(cr);
+    const m = s.match(/^4\/(\d+)$/);
+    return m ? m[1] : s;
+  }
+
   const firstCaptured = $derived(
     mapPublishes.length ? mapPublishes[mapPublishes.length - 1].firstCapturedAt || 0 : 0
   );
@@ -836,6 +891,35 @@
   const lastAge = $derived(node ? Math.max(0, Date.now() / 1000 - lastHeard) : Infinity);
   const freshColor = $derived(lastAge < 3600 ? 'bg-ok' : lastAge < 86400 ? 'bg-warn' : 'bg-muted');
 
+  const regionNames =
+    typeof Intl !== 'undefined' && Intl.DisplayNames
+      ? new Intl.DisplayNames(['en'], { type: 'region' })
+      : null;
+
+  function networkRadios(network) {
+    return Array.isArray(network?.radios) ? network.radios : network?.radio ? [network.radio] : [];
+  }
+
+  function countryLabel(code) {
+    const upper = String(code || '').toUpperCase();
+    return regionNames?.of(upper) || upper;
+  }
+
+  function networkCoverageLabel(countries) {
+    if (!countries?.length) return 'Unspecified coverage';
+    return countries.map((code) => countryLabel(code)).join(', ');
+  }
+
+  function networkRadioSummary(radio) {
+    if (!radio) return 'No radio preset in catalog';
+    const parts = [];
+    if (radio.frequency_mhz != null) parts.push(`${radio.frequency_mhz} MHz`);
+    if (radio.bandwidth_khz != null) parts.push(`${radio.bandwidth_khz} kHz`);
+    if (radio.spreading_factor != null) parts.push(`SF${radio.spreading_factor}`);
+    if (radio.coding_rate != null) parts.push(`CR ${fmtCodingRate(radio.coding_rate)}`);
+    return parts.join(' · ') || 'Radio preset listed';
+  }
+
   // Each network the node was heard on, enriched from the catalog (flags) and the
   // per-network advert stats (count + last advert). Most-recently-active first.
   const netDetails = $derived(
@@ -843,10 +927,24 @@
       .map((id) => {
         const c = catalog[id] || {};
         const s = netStats[id] || {};
+        const radios = networkRadios(c);
+        const primaryRadio = radios[0] || null;
+        const countries = c.coverage?.countries ?? [];
+        const band = primaryRadio?.frequency != null ? bandCatalog[String(primaryRadio.frequency)] : null;
         return {
           id,
           name: c.name || id,
+          description: c.description || '',
           flags: networkFlags(c),
+          countries,
+          coverage: networkCoverageLabel(countries),
+          analyzers: c.analyzers ?? [],
+          radios,
+          radio: primaryRadio,
+          radioSummary: networkRadioSummary(primaryRadio),
+          channel: primaryRadio?.public_channel ?? '',
+          appPreset: radios.some((r) => r?.app_preset),
+          band,
           adverts: s.adverts || 0,
           lastAt: s.lastAt || 0
         };
@@ -988,16 +1086,253 @@
         <span class="h-3 w-24 animate-pulse rounded bg-edge sm:w-32"></span>
       </span>
     {/snippet}
+    {#snippet helpTip(text, kind = '', href = '', linkText = 'Learn more')}
+      <Tooltip.Root>
+        <Tooltip.Trigger
+          class="inline-grid h-4 w-4 shrink-0 place-items-center rounded-full text-muted outline-none hover:text-accent focus-visible:text-accent focus-visible:ring-1 focus-visible:ring-accent"
+          aria-label="More information"
+        >
+          <CircleQuestionMark size={13} aria-hidden="true" />
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            side="top"
+            sideOffset={6}
+            class="z-50 max-w-72 rounded-md border border-edge bg-elev2 px-3 py-2 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+          >
+            {#if kind}
+              <div class="mb-2 rounded-md border border-edge/80 bg-bg/70 px-2 py-2">
+                {#if kind === 'frequency'}
+                  <div class="flex h-8 items-center gap-1">
+                    {#each [1, 2, 3, 4, 5, 6, 7] as n}
+                      <span
+                        class="block w-4 rounded-full bg-accent/80"
+                        style={`height:${[10, 18, 26, 18, 10, 18, 26][n - 1]}px`}
+                      ></span>
+                    {/each}
+                  </div>
+                  <div class="mt-1 text-[10px] uppercase tracking-wide text-muted">same channel center</div>
+                {:else if kind === 'bandwidth'}
+                  <div class="flex h-8 items-end gap-1">
+                    <span class="h-2 w-5 rounded-sm bg-accent2/35"></span>
+                    <span class="h-4 w-9 rounded-sm bg-accent2/70"></span>
+                    <span class="h-6 w-14 rounded-sm bg-accent"></span>
+                  </div>
+                  <div class="mt-1 flex justify-between text-[10px] text-muted">
+                    <span>narrow</span><span>wider</span>
+                  </div>
+                {:else if kind === 'spreading'}
+                  <div class="grid grid-cols-3 gap-1 text-center text-[10px]">
+                    <span class="rounded bg-accent/15 px-1 py-1 text-accent">SF7<br />fast</span>
+                    <span class="rounded bg-accent/25 px-1 py-1 text-accent">SF9<br />mid</span>
+                    <span class="rounded bg-accent/40 px-1 py-1 text-accent">SF12<br />far</span>
+                  </div>
+                {:else if kind === 'coding'}
+                  <div class="flex items-center gap-1">
+                    <span class="h-4 w-6 rounded-sm bg-accent"></span>
+                    <span class="h-4 w-2 rounded-sm bg-warn"></span>
+                    <span class="h-4 w-2 rounded-sm bg-warn"></span>
+                    <span class="text-[10px] text-muted">data + repair bits</span>
+                  </div>
+                  <div class="mt-1 text-[10px] uppercase tracking-wide text-muted">MeshCore shows one number</div>
+                {:else if kind === 'activity'}
+                  <div class="grid w-max grid-cols-7 gap-1">
+                    {#each [0, 1, 2, 0, 3, 4, 1, 0, 2, 4, 3, 0, 1, 4] as level}
+                      <span class={`h-2.5 w-2.5 rounded-[2px] ${heatmapColor(level)}`}></span>
+                    {/each}
+                  </div>
+                  <div class="mt-1 text-[10px] uppercase tracking-wide text-muted">days with adverts</div>
+                {:else if kind === 'links'}
+                  <div class="flex items-center justify-center gap-1.5">
+                    <span class="h-3 w-3 rounded-full bg-accent"></span>
+                    <span class="h-px w-8 bg-edge"></span>
+                    <span class="h-3 w-3 rounded-full bg-accent2"></span>
+                    <span class="h-px w-8 bg-edge"></span>
+                    <span class="h-3 w-3 rounded-full bg-warn"></span>
+                  </div>
+                  <div class="mt-1 text-center text-[10px] uppercase tracking-wide text-muted">observed relationships</div>
+                {:else if kind === 'history'}
+                  <div class="space-y-1">
+                    <div class="h-2 w-20 rounded bg-accent/75"></div>
+                    <div class="h-2 w-28 rounded bg-accent2/60"></div>
+                    <div class="h-2 w-16 rounded bg-warn/65"></div>
+                  </div>
+                  <div class="mt-1 text-[10px] uppercase tracking-wide text-muted">newest first timeline</div>
+                {:else if kind === 'hash'}
+                  <div class="flex items-center gap-1">
+                    <span class="rounded bg-accent/20 px-1.5 py-1 font-mono text-[10px] text-accent">a1b2</span>
+                    <span class="text-muted">=</span>
+                    <span class="h-2 w-2 rounded-full bg-accent2"></span>
+                    <span class="h-2 w-2 rounded-full bg-accent2"></span>
+                    <span class="h-2 w-2 rounded-full bg-accent2"></span>
+                  </div>
+                  <div class="mt-1 text-[10px] uppercase tracking-wide text-muted">same payload, many observers</div>
+                {/if}
+              </div>
+            {/if}
+            {text}
+            {#if href}
+              <a
+                class="mt-2 block text-accent2 hover:underline"
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {linkText} ↗
+              </a>
+            {/if}
+            <Tooltip.Arrow class="text-edge" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    {/snippet}
+    {#snippet labelHelp(label, help, kind = '', href = '', linkText = 'Learn more')}
+      <span class="inline-flex items-center gap-1">
+        <span>{label}</span>
+        {@render helpTip(help, kind, href, linkText)}
+      </span>
+    {/snippet}
+    {#snippet sectionTitle(label, help, kind = '', href = '', linkText = 'Learn more')}
+      <h2 class="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
+        <span>{label}</span>
+        {@render helpTip(help, kind, href, linkText)}
+      </h2>
+    {/snippet}
+    {#snippet badgeTip(help, kind = '', href = '', linkText = 'Learn more', side = 'top')}
+      <Tooltip.Portal>
+        <Tooltip.Content
+          {side}
+          sideOffset={6}
+          class="z-50 max-w-72 rounded-md border border-edge bg-elev2 px-3 py-2 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+        >
+          {#if kind}
+            <div class="mb-2 rounded-md border border-edge/80 bg-bg/70 px-2 py-2">
+              {#if kind === 'identity'}
+                <div class="flex items-center gap-1.5">
+                  <span class="grid h-6 w-6 place-items-center rounded bg-accent/15 text-accent">
+                    <NodeIcon type={node.type} size={14} />
+                  </span>
+                  <span class="h-px w-10 bg-edge"></span>
+                  <span class="rounded bg-accent2/15 px-1.5 py-1 text-[10px] text-accent2">role</span>
+                </div>
+              {:else if kind === 'freshness'}
+                <div class="flex items-center gap-2">
+                  <span class="h-2.5 w-2.5 rounded-full bg-ok"></span>
+                  <span class="h-2.5 w-2.5 rounded-full bg-warn"></span>
+                  <span class="h-2.5 w-2.5 rounded-full bg-muted"></span>
+                  <span class="text-[10px] text-muted">recent to old</span>
+                </div>
+              {:else if kind === 'unsigned'}
+                <div class="flex items-center gap-1.5">
+                  <ShieldAlert size={14} class="text-warn" />
+                  <span class="h-px w-8 bg-edge"></span>
+                  <span class="rounded bg-warn/15 px-1.5 py-1 text-[10px] text-warn">not signed here</span>
+                </div>
+              {/if}
+            </div>
+          {/if}
+          {help}
+          {#if href}
+            <a
+              class="mt-2 block text-accent2 hover:underline"
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {linkText} ↗
+            </a>
+          {/if}
+          <Tooltip.Arrow class="text-edge" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    {/snippet}
+    {#snippet networkInfoTip(n)}
+      <Tooltip.Portal>
+        <Tooltip.Content
+          side="top"
+          sideOffset={8}
+          class="z-50 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-edge bg-elev2 px-3 py-3 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+        >
+          <div class="mb-2 flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5">
+                {#if n.flags.length}
+                  <span class="flex shrink-0 items-center gap-1">
+                    {#each n.flags as f (f.code)}<Flag code={f.code} class="h-3 w-5" />{/each}
+                  </span>
+                {/if}
+                <div class="truncate font-semibold text-ink">{n.name}</div>
+              </div>
+              <div class="mt-0.5 font-mono text-[10px] text-muted">{n.id}</div>
+            </div>
+            {#if n.appPreset}
+              <span class="shrink-0 rounded border border-accent2/30 bg-accent2/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent2">
+                app preset
+              </span>
+            {/if}
+          </div>
+
+          {#if n.description}
+            <p class="mb-2 text-dim">{n.description}</p>
+          {/if}
+
+          <div class="mb-2 rounded-md border border-edge/80 bg-bg/70 px-2 py-2">
+            <div class="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted">
+              <span>Radio</span>
+              {#if n.band}
+                <span
+                  class="rounded border px-1.5 py-0.5 normal-case"
+                  style={n.band.color
+                    ? `color:${n.band.color};border-color:${n.band.color}66;background-color:${n.band.color}1f`
+                    : ''}
+                >
+                  {n.band.region || `${n.radio?.frequency ?? ''} MHz`}
+                </span>
+              {/if}
+            </div>
+            <div class="font-mono text-[11px] text-ink">{n.radioSummary}</div>
+            {#if n.channel}
+              <div class="mt-1 text-[11px] text-muted">
+                public channel <span class="font-mono text-dim">{n.channel}</span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div class="rounded bg-bg/70 px-2 py-1.5">
+              <div class="text-[10px] uppercase tracking-wide text-muted">Coverage</div>
+              <div class="mt-0.5 truncate" title={n.coverage}>{n.coverage}</div>
+            </div>
+            <div class="rounded bg-bg/70 px-2 py-1.5">
+              <div class="text-[10px] uppercase tracking-wide text-muted">Analyzers</div>
+              <div class="mt-0.5">{n.analyzers.length || '—'}</div>
+            </div>
+            <div class="rounded bg-bg/70 px-2 py-1.5">
+              <div class="text-[10px] uppercase tracking-wide text-muted">Node adverts</div>
+              <div class="mt-0.5">{n.adverts ? n.adverts.toLocaleString() : '—'}</div>
+            </div>
+            <div class="rounded bg-bg/70 px-2 py-1.5">
+              <div class="text-[10px] uppercase tracking-wide text-muted">Last seen here</div>
+              <div class="mt-0.5" title={n.lastAt ? fmtTime(n.lastAt) : ''}>{n.lastAt ? fmtAgo(n.lastAt) : '—'}</div>
+            </div>
+          </div>
+
+          <div class="mt-2 text-[11px] text-muted">Click to open this network in the MeshCore catalog.</div>
+          <Tooltip.Arrow class="text-edge" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    {/snippet}
     <!-- Top: identity + overview + extras (left), map + add-to-app (top-right) -->
+    <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
     <div class="mt-4 grid gap-6 lg:grid-cols-3 items-start">
       <!-- Map + QR: below main content on mobile, sticky sidebar on desktop -->
       <aside class="order-2 space-y-6 lg:order-2 lg:sticky lg:top-6">
         {#if radio}
           <section>
             <div class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">LoRa Radio</h2>
+              {@render sectionTitle('LoRa Radio', 'Radio settings used by this node or by the network it was heard on. Matching these values matters for devices to exchange packets.', 'frequency', 'https://www.semtech.com/design-support/faq/faq-lora', 'LoRa FAQ')}
               <div class="flex items-center gap-1.5 text-[11px] text-muted">
-                <span>Source:</span>
+                {@render labelHelp('Source:', 'Where these radio parameters came from. Network values are observed from the directory catalog; map entries are mirrored from map.meshcore.io.')}
                 {#if radio.networkId}
                   <a
                     href={networkUrl(radio.networkId)}
@@ -1016,7 +1351,7 @@
             </div>
             <div class="rounded-xl border border-edge bg-elev p-3">
               <div class="mb-2 flex flex-wrap items-center gap-2">
-                <span class="text-xs text-muted">Band</span>
+                <span class="text-xs text-muted">{@render labelHelp('Band', 'Regional LoRa band group. It summarizes the legal frequency range and common MeshCore preset for this node.', 'bandwidth', 'https://meshcore.ninja/bands', 'MeshCore bands')}</span>
                 <a
                   href="https://meshcore.ninja/bands"
                   target="_blank"
@@ -1036,20 +1371,20 @@
                 {/if}
               </div>
               <div class="grid grid-cols-2 gap-2">
-                {#snippet radioStat(label, value)}
+                {#snippet radioStat(label, value, help, kind = '', href = '', linkText = 'Learn more')}
                   <div class="rounded-lg bg-bg px-3 py-2">
-                    <div class="text-xs text-muted">{label}</div>
+                    <div class="text-xs text-muted">{@render labelHelp(label, help, kind, href, linkText)}</div>
                     <div class="mt-0.5 font-mono text-sm font-semibold">{value}</div>
                   </div>
                 {/snippet}
-                {@render radioStat('Frequency', radio.freq != null ? `${radio.freq} MHz` : '—')}
-                {@render radioStat('Bandwidth', radio.bw != null ? `${radio.bw} kHz` : '—')}
-                {@render radioStat('Spreading', radio.sf != null ? `SF${radio.sf}` : '—')}
-                {@render radioStat('Coding rate', radio.cr ?? '—')}
+                {@render radioStat('Frequency', radio.freq != null ? `${radio.freq} MHz` : '—', 'Center frequency used for the LoRa channel, in MHz. Radios must be on the same frequency to hear each other.', 'frequency')}
+                {@render radioStat('Bandwidth', radio.bw != null ? `${radio.bw} kHz` : '—', 'LoRa channel width. Narrower bandwidth usually improves sensitivity but sends data more slowly.', 'bandwidth', 'https://www.semtech.com/design-support/faq/faq-lora', 'LoRa FAQ')}
+                {@render radioStat('Spreading', radio.sf != null ? `SF${radio.sf}` : '—', 'LoRa spreading factor. Higher SF reaches farther at the cost of slower airtime; lower SF is faster but needs a stronger signal.', 'spreading', 'https://www.thethingsnetwork.org/docs/lorawan/spreading-factors/', 'Spreading factors')}
+                {@render radioStat('Coding rate', fmtCodingRate(radio.cr), 'Forward error correction setting. MeshCore usually shows this as a single number; larger values mean less redundancy and shorter airtime, while smaller values add more repair data.', 'coding', 'https://www.semtech.com/design-support/faq/faq-lora', 'LoRa FAQ')}
               </div>
               {#if radio.channel}
                 <div class="mt-2 flex items-center gap-2 text-xs">
-                  <span class="text-muted">Public channel</span>
+                  <span class="text-muted">{@render labelHelp('Public channel', 'MeshCore channel name embedded in the network preset. Devices generally need the same channel and radio settings to participate.', '', 'https://github.com/meshcore-dev/MeshCore', 'MeshCore project')}</span>
                   <span class="font-mono text-dim">{radio.channel}</span>
                 </div>
               {/if}
@@ -1059,7 +1394,7 @@
 
         <section>
           <div class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-            <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Location</h2>
+            {@render sectionTitle('Location', 'Coordinates advertised by the node or mirrored from the map directory. Neighbor lines are shown only for linked nodes that also publish coordinates.')}
             <div class="flex flex-col items-start gap-0.5 sm:items-end">
               {#if node.hasGps}
                 <Select.Root
@@ -1168,13 +1503,23 @@
             <div class="min-w-0 flex-1">
               <h1 class="text-2xl sm:text-3xl font-semibold truncate">{node.name || '(unnamed)'}</h1>
               <div class="mt-2 flex flex-wrap items-center gap-2 text-sm text-dim">
-                <span class="rounded-full border border-edge px-2 py-0.5 capitalize">
-                  {TYPE_LABEL[node.type] ?? 'unknown'}
-                </span>
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="h-2 w-2 rounded-full {freshColor}"></span>
-                  {mapOnly ? 'Last map publish' : 'Last heard'} {fmtAgo(lastHeard)}
-                </span>
+                <Tooltip.Root>
+                  <Tooltip.Trigger
+                    class="rounded-full border border-edge px-2 py-0.5 capitalize outline-none hover:border-accent/60 hover:text-ink focus-visible:ring-1 focus-visible:ring-accent"
+                  >
+                    {TYPE_LABEL[node.type] ?? 'unknown'}
+                  </Tooltip.Trigger>
+                  {@render badgeTip('Advertised MeshCore node role. Repeaters relay mesh traffic; companions are user devices; rooms and sensors expose specialized endpoints.', 'identity', 'https://github.com/meshcore-dev/MeshCore', 'MeshCore project')}
+                </Tooltip.Root>
+                <Tooltip.Root>
+                  <Tooltip.Trigger
+                    class="inline-flex items-center gap-1.5 rounded-full px-1 py-0.5 outline-none hover:bg-elev2 hover:text-ink focus-visible:ring-1 focus-visible:ring-accent"
+                  >
+                    <span class="h-2 w-2 rounded-full {freshColor}"></span>
+                    {mapOnly ? 'Last map publish' : 'Last heard'} {fmtAgo(lastHeard)}
+                  </Tooltip.Trigger>
+                  {@render badgeTip(mapOnly ? 'This is the newest captured map-directory update. It is not the same as a signed advert captured by our analyzers.' : 'Newest activity we know about for this node: either a signed advert or a neighbor link involving it.', 'freshness')}
+                </Tooltip.Root>
                 {#if locationSubtitle}
                   <span class="ml-1 inline-flex items-center gap-1.5 sm:ml-1.5">
                     {#if place?.countryCode}
@@ -1187,13 +1532,24 @@
                     {@render placeLoadingSkeleton()}
                   </span>
                 {/if}
+                {#if mapOnly}
+                  <Tooltip.Root>
+                    <Tooltip.Trigger
+                      class="inline-flex items-center gap-1 rounded-full border border-warn/45 bg-warn/10 px-2 py-0.5 text-warn outline-none hover:border-warn/70 hover:bg-warn/15 focus-visible:ring-1 focus-visible:ring-warn"
+                    >
+                      <ShieldAlert size={13} aria-hidden="true" />
+                      Unsigned map entry
+                    </Tooltip.Trigger>
+                    {@render badgeTip('Mirrored from map.meshcore.io, but this site has not captured a signed advert for the node yet. Treat identity, location, and radio details as directory data until a signed advert appears.', 'unsigned', 'https://map.meshcore.io', 'Open map directory')}
+                  </Tooltip.Root>
+                {/if}
               </div>
             </div>
           </div>
 
           <!-- Public key -->
           <div class="mt-5">
-            <div class="text-[10px] uppercase tracking-wide text-muted mb-1">Public key</div>
+            <div class="text-[10px] uppercase tracking-wide text-muted mb-1">{@render labelHelp('Public key', 'The node identity key. This is the stable address used to link adverts, neighbors, map publishes, and the QR contact payload.', '', 'https://github.com/meshcore-dev/MeshCore', 'MeshCore project')}</div>
             <div class="flex items-center gap-2 rounded-lg bg-bg border border-edge px-3 py-2">
               <span class="flex-1 min-w-0 font-mono text-xs sm:text-sm text-dim">
                 <span class="truncate sm:hidden" title={pubkey}>{shortKeyWide(pubkey)}</span>
@@ -1207,39 +1563,45 @@
         </header>
 
         {#if mapOnly}
-          <div class="rounded-xl border border-accent2/30 bg-accent2/5 px-4 py-3 text-sm text-dim">
-            This node hasn’t been observed by our analyzers yet. The details below are
-            mirrored from the
-            <a href={MAP_SITE} target="_blank" rel="noreferrer" class="text-accent2 hover:underline">map.meshcore.io</a>
-            directory — see <a href="#map-publishes" class="text-accent2 hover:underline">Map publishes</a> below.
+          <div class="flex items-start gap-3 rounded-xl border border-warn/35 bg-warn/10 px-4 py-3 text-sm text-dim">
+            <ShieldAlert size={18} class="mt-0.5 shrink-0 text-warn" aria-hidden="true" />
+            <p>
+              <span class="font-medium text-ink">Unsigned map entry.</span>
+              We have not captured a signed advert for this node yet, so the details below are
+              mirrored from the
+              <a href={MAP_SITE} target="_blank" rel="noreferrer" class="text-accent2 hover:underline">map.meshcore.io</a>
+              directory. See <a href="#map-publishes" class="text-accent2 hover:underline">Map publishes</a> for the captured snapshots.
+            </p>
           </div>
         {/if}
 
         <!-- Overview -->
         <section>
-          <h2 class="text-xs font-semibold uppercase tracking-wide text-muted mb-2">Overview</h2>
+          <div class="mb-2">
+            {@render sectionTitle('Overview', 'A compact summary of when this node appeared, how recently it was active, and how much supporting data we have for it.', 'history')}
+          </div>
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {#snippet stat(label, value, sub)}
+            {#snippet stat(label, value, sub, help, kind = '', href = '', linkText = 'Learn more')}
               <div class="rounded-lg bg-elev px-3 py-2.5">
-                <div class="text-xs text-muted">{label}</div>
+                <div class="text-xs text-muted">{@render labelHelp(label, help, kind, href, linkText)}</div>
                 <div class="text-base font-semibold mt-1 truncate" title={value}>{value}</div>
                 {#if sub}<div class="text-xs text-dim mt-0.5">{sub}</div>{/if}
               </div>
             {/snippet}
             {#if mapOnly}
               {@const mapAdvert = sane(node.lastAdvertAt || 0)}
-              {@render stat('First captured', fmtAgo(firstCaptured), fmtTime(firstCaptured))}
-              {@render stat('Last map publish', fmtAgo(lastHeard), 'from directory')}
-              {@render stat('Last advert', mapAdvert ? fmtAgo(mapAdvert) : '—', mapAdvert ? `${fmtTime(mapAdvert)} · per map` : 'unknown')}
-              {@render stat('Publishes', mapPublishes.length ? String(mapPublishes.length) : '—', 'captured')}
-              {@render stat('Location', node.hasGps ? fmtCoords(node.lat, node.lon) : '—', node.hasGps ? 'from map' : 'no coordinates')}
+              {@render stat('First captured', fmtAgo(firstCaptured), fmtTime(firstCaptured), 'When this map-directory entry first appeared in our captured snapshots. This is not a signed advert observation.')}
+              {@render stat('Last map publish', fmtAgo(lastHeard), 'from directory', 'Most recent update time for the mirrored map.meshcore.io entry.')}
+              {@render stat('Last advert', mapAdvert ? fmtAgo(mapAdvert) : '—', mapAdvert ? `${fmtTime(mapAdvert)} · per map` : 'unknown', 'Advert timestamp reported by the map directory. For unsigned map entries this has not been verified by our analyzers.')}
+              {@render stat('Publishes', mapPublishes.length ? String(mapPublishes.length) : '—', 'captured', 'How many distinct map-directory snapshots we have stored for this node.')}
+              {@render stat('Location', node.hasGps ? fmtCoords(node.lat, node.lon) : '—', node.hasGps ? 'from map' : 'no coordinates', 'Coordinates mirrored from the map entry, when available.')}
             {:else}
-              {@render stat('First seen', fmtAgo(node.firstAdvertAt), fmtTime(node.firstAdvertAt))}
-              {@render stat('Last heard', fmtAgo(lastHeard), 'advert or link')}
-              {@render stat('Last advert', fmtAgo(node.lastAdvertAt), fmtTime(node.lastAdvertAt))}
-              {@render stat('Adverts', node.advertCount.toLocaleString(), 'observed total')}
-              {@render stat('Networks', String((node.networks ?? []).length), 'heard on')}
-              {@render stat('Links', linksTotal ? linksTotal.toLocaleString() : '—', 'neighbours')}
+              {@render stat('First seen', fmtAgo(node.firstAdvertAt), fmtTime(node.firstAdvertAt), 'Earliest signed advert we have captured for this public key.')}
+              {@render stat('Last heard', fmtAgo(lastHeard), 'advert or link', 'Newest activity we know about: either a signed advert from this node or a neighbor link involving it.')}
+              {@render stat('Last advert', fmtAgo(node.lastAdvertAt), fmtTime(node.lastAdvertAt), 'Most recent signed advert captured for this node. Adverts carry identity, type, location, and network metadata.')}
+              {@render stat('Adverts', node.advertCount.toLocaleString(), 'observed total', 'Total signed advert observations captured across analyzers and networks. Repeated observations of the same content may be grouped in the history table.', 'hash', 'https://github.com/meshcore-dev/MeshCore', 'MeshCore project')}
+              {@render stat('Networks', String((node.networks ?? []).length), 'heard on', 'Number of network catalogs where this node has been observed.')}
+              {@render stat('Links', linksTotal ? linksTotal.toLocaleString() : '—', 'neighbours', 'Neighbor relationships reported by analyzers. A link means packets suggest these nodes can hear or route near each other; distance is only shown when both have coordinates.', 'links')}
             {/if}
           </div>
         </section>
@@ -1247,32 +1609,47 @@
         <!-- Networks (enriched from the catalog) -->
         {#if netDetails.length}
           <section>
-            <h2 class="text-xs font-semibold uppercase tracking-wide text-muted mb-2">Networks</h2>
+            <div class="mb-2">
+            {@render sectionTitle('Networks', 'Networks where this node was observed. The number in parentheses is the captured advert count for that network.', 'links')}
+            </div>
             <div class="grid sm:grid-cols-2 gap-3">
               {#each netDetails as n}
-                <a
-                  href={networkUrl(n.id)}
-                  rel="noreferrer"
-                  class="group flex flex-col gap-1 rounded-lg bg-elev px-3 py-2 hover:bg-elev2 transition-colors sm:flex-row sm:items-center sm:gap-2.5"
-                >
-                  <span class="flex min-w-0 items-center gap-2.5">
-                    {#if n.flags.length}
-                      <span class="flex shrink-0 items-center gap-1">
-                        {#each n.flags as f (f.code)}<Flag code={f.code} />{/each}
-                      </span>
-                    {:else}
-                      <span class="text-lg leading-none">🌐</span>
-                    {/if}
-                    <span class="min-w-0 flex-1 font-medium truncate group-hover:text-accent" title={n.name}>
-                      {n.name}
-                    </span>
-                  </span>
-                  {#if n.lastAt}
-                    <span class="text-xs text-dim sm:shrink-0 sm:whitespace-nowrap sm:text-right" title={fmtTime(n.lastAt)}>
-                      {fmtAgo(n.lastAt)} ({n.adverts.toLocaleString()})
-                    </span>
-                  {/if}
-                </a>
+                <Tooltip.Root>
+                  <Tooltip.Trigger>
+                    {#snippet child({ props })}
+                      <a
+                        {...props}
+                        href={networkUrl(n.id)}
+                        rel="noreferrer"
+                        class="group flex flex-col gap-1 rounded-lg bg-elev px-3 py-2 outline-none transition-colors hover:bg-elev2 focus-visible:ring-1 focus-visible:ring-accent sm:flex-row sm:items-center sm:gap-2.5"
+                      >
+                        <span class="flex min-w-0 items-center gap-2.5">
+                          {#if n.flags.length}
+                            <span class="flex shrink-0 items-center gap-1">
+                              {#each n.flags as f (f.code)}<Flag code={f.code} />{/each}
+                            </span>
+                          {:else}
+                            <span class="text-lg leading-none">🌐</span>
+                          {/if}
+                          <span class="min-w-0 flex-1 font-medium truncate group-hover:text-accent" title={n.name}>
+                            {n.name}
+                          </span>
+                          {#if n.appPreset}
+                            <span class="hidden rounded border border-accent2/30 bg-accent2/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent2 sm:inline">
+                              preset
+                            </span>
+                          {/if}
+                        </span>
+                        {#if n.lastAt}
+                          <span class="text-xs text-dim sm:shrink-0 sm:whitespace-nowrap sm:text-right" title={fmtTime(n.lastAt)}>
+                            {fmtAgo(n.lastAt)} ({n.adverts.toLocaleString()})
+                          </span>
+                        {/if}
+                      </a>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  {@render networkInfoTip(n)}
+                </Tooltip.Root>
               {/each}
             </div>
           </section>
@@ -1280,8 +1657,8 @@
 
         <section>
           <div class="mb-2 flex items-baseline justify-between gap-3">
-            <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Advert activity</h2>
-            <span class="text-xs text-muted">last {visibleHeatmapDayCount()} days</span>
+            {@render sectionTitle('Advert activity', 'Daily activity from captured signed adverts. Brighter cells mean more adverts were observed on that day.', 'activity')}
+            <span class="text-xs text-muted">{@render labelHelp(`last ${visibleHeatmapDayCount()} days`, 'The visible range adapts to the card width. Hover or focus a square to see the exact day and advert count.', 'activity')}</span>
           </div>
           <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
           <div class="rounded-lg bg-elev px-3 py-3 min-w-0" use:bindHeatmapMeasure>
@@ -1367,37 +1744,52 @@
         {#if links.length}
           <section>
             <div class="flex items-baseline justify-between mb-2">
-              <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Neighbors</h2>
-              <span class="text-xs text-muted">{linksTotal} link{linksTotal === 1 ? '' : 's'}</span>
+              {@render sectionTitle('Neighbors', 'Nodes linked to this node by observed packet activity. The table is evidence of connectivity, not a guaranteed live route right now.', 'links')}
+              <span class="text-xs text-muted">{@render labelHelp(`${linksTotal} link${linksTotal === 1 ? '' : 's'}`, 'Total neighbor links known by the API. The table shows the most relevant rows unless you expand or sort it.', 'links')}</span>
             </div>
             <div class="overflow-x-auto rounded-xl border border-edge">
               <table class="w-full text-sm">
                 <thead class="bg-elev2 text-muted text-xs">
                   <tr>
                     <th class="text-left font-medium px-3 py-2">
-                      <button class="hover:text-ink" onclick={() => sortNeighbors('name')}>
-                        Neighbour{sortMark('name')}
-                      </button>
+                      <span class="inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('name')}>
+                          Neighbour{sortMark('name')}
+                        </button>
+                        {@render helpTip('The linked node name and type. Click a row to open that node profile.', 'links')}
+                      </span>
                     </th>
                     <th class="text-left font-medium px-3 py-2">
-                      <button class="hover:text-ink" onclick={() => sortNeighbors('pubkey')}>
-                        Public key{sortMark('pubkey')}
-                      </button>
+                      <span class="inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('pubkey')}>
+                          Public key{sortMark('pubkey')}
+                        </button>
+                        {@render helpTip('Short form of the linked node public key.')}
+                      </span>
                     </th>
                     <th class="text-right font-medium px-3 py-2">
-                      <button class="ml-auto block hover:text-ink" onclick={() => sortNeighbors('distance')}>
-                        Distance{sortMark('distance')}
-                      </button>
+                      <span class="ml-auto inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('distance')}>
+                          Distance{sortMark('distance')}
+                        </button>
+                        {@render helpTip(`Straight-line distance between advertised coordinates. Values over ${MAX_REAL_LINK_KM} km are marked unreal because they are unlikely to be direct radio links.`, 'links')}
+                      </span>
                     </th>
                     <th class="text-right font-medium px-3 py-2">
-                      <button class="ml-auto block hover:text-ink" onclick={() => sortNeighbors('packets')}>
-                        Packets{sortMark('packets')}
-                      </button>
+                      <span class="ml-auto inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('packets')}>
+                          Packets{sortMark('packets')}
+                        </button>
+                        {@render helpTip('Number of packets or link observations attributed to this neighbor relationship.', 'activity')}
+                      </span>
                     </th>
                     <th class="text-left font-medium px-3 py-2">
-                      <button class="hover:text-ink" onclick={() => sortNeighbors('last')}>
-                        Last heard{sortMark('last')}
-                      </button>
+                      <span class="inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('last')}>
+                          Last heard{sortMark('last')}
+                        </button>
+                        {@render helpTip('Most recent time this neighbor relationship was observed.')}
+                      </span>
                     </th>
                   </tr>
                 </thead>
@@ -1460,7 +1852,9 @@
         <!-- History-derived timelines -->
         {#if prevNames.length || prevTypes.length || prevLocations.length}
           <section>
-            <h2 class="text-xs font-semibold uppercase tracking-wide text-muted mb-2">Identity history</h2>
+            <div class="mb-2">
+            {@render sectionTitle('Identity history', 'Previous names, types, or locations seen in older adverts. This helps spot renames, moves, or reconfigured devices.', 'history')}
+            </div>
             <div class="grid sm:grid-cols-3 gap-3">
               {#snippet prevCard(title, items, mono)}
                 <div class="rounded-lg bg-elev px-3 py-2">
@@ -1484,34 +1878,36 @@
     {#if adverts.length}
     <section class="mt-8">
       <div class="flex items-baseline justify-between mb-2">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Advert history</h2>
-        <span class="text-xs text-muted">{adverts.length} loaded{hasMore ? '+' : ''}</span>
+        {@render sectionTitle('Advert history', 'Signed adverts captured for this public key, newest first. Changed fields are softly highlighted; repeated values are dimmed so profile changes stand out.', 'history', 'https://github.com/meshcore-dev/MeshCore', 'MeshCore project')}
+        <span class="text-xs text-muted">{@render labelHelp(`${adverts.length} loaded${hasMore ? '+' : ''}`, 'Rows are loaded in pages. A plus means older adverts are available with the load button below.', 'history')}</span>
       </div>
       <div class="overflow-x-auto rounded-xl border border-edge">
         <table class="w-full text-sm">
           <thead class="bg-elev2 text-muted text-xs">
             <tr>
-              <th class="text-left font-medium px-3 py-2">Received</th>
-              <th class="text-left font-medium px-3 py-2">Content hash</th>
-              <th class="text-left font-medium px-3 py-2">Advert time</th>
-              <th class="text-left font-medium px-3 py-2">Name</th>
-              <th class="text-left font-medium px-3 py-2 w-12">Type</th>
-              <th class="text-left font-medium px-3 py-2">Location</th>
-              <th class="text-left font-medium px-3 py-2">Network</th>
-              <th class="text-left font-medium px-3 py-2">Analyzer</th>
-              <th class="text-left font-medium px-3 py-2">Observer</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Received', 'When one of our analyzers received this advert packet.')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Content hash', 'Hash of the advert payload. Identical content observed by multiple analyzers is grouped under the same hash.', 'hash')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Advert time', 'Timestamp encoded in the advert itself, when available. This can differ from when the analyzer received it.')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Name', 'Node name advertised in this packet.')}</th>
+              <th class="text-left font-medium px-3 py-2 w-12">{@render labelHelp('Type', 'MeshCore node role advertised in this packet, such as repeater, companion, room, or sensor.')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Location', 'Coordinates carried by the advert, if the node published GPS data.')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Network', 'Network catalog context where the advert was observed.')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Analyzer', 'Analyzer instance that captured or reported this packet. Links open the packet in the analyzer when available.')}</th>
+              <th class="text-left font-medium px-3 py-2">{@render labelHelp('Observer', 'Specific observer device or station behind the analyzer, when provided.')}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-edge">
-            {#each advertGroups as group (group.key)}
+            {#each advertGroups as group, groupIndex (group.key)}
               {@const a = group.first}
+              {@const prevGroup = advertGroups[groupIndex - 1]}
+              {@const diff = advertDiff(a, prevGroup?.first, group, prevGroup)}
               {@const canExpand = group.adverts.length > 1}
               {@const expanded = canExpand && expandedAdvertGroups.has(group.key)}
               <tr
                 class="cursor-pointer hover:bg-elev"
                 onclick={() => openAdvertDetails(a, group)}
               >
-                <td class="px-3 py-2 whitespace-nowrap text-xs" title={fmtTime(a.at)}>
+                <td class={diffCellClass(diff.received, 'px-3 py-2 whitespace-nowrap text-xs')} title={fmtTime(a.at)}>
                   <span class="inline-flex items-center gap-1.5">
                     {#if canExpand}
                       <button
@@ -1530,22 +1926,22 @@
                     {fmtAgo(a.at)}
                   </span>
                 </td>
-                <td class="px-3 py-2 whitespace-nowrap font-mono text-xs">
+                <td class={diffCellClass(diff.hash, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>
                   {#if group.hash}
-                    <span class="text-accent2" title={group.hash}>{shortHash(group.hash)}</span>
+                    <span class={diffValueClass(diff.hash, 'font-mono')} title={group.hash}>{shortHash(group.hash)}</span>
                   {:else}
                     <span class="text-muted">—</span>
                   {/if}
                 </td>
-                <td class="px-3 py-2 whitespace-nowrap font-mono text-xs">{fmtTime(a.advertTime)}</td>
-                <td class="px-3 py-2 max-w-[16rem] truncate" title={a.name}>{a.name || '—'}</td>
-                <td class="px-3 py-2 whitespace-nowrap">
+                <td class={diffCellClass(diff.advertTime, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>{fmtTime(a.advertTime)}</td>
+                <td class={diffCellClass(diff.name, 'px-3 py-2 max-w-[16rem] truncate')} title={a.name}>{a.name || '—'}</td>
+                <td class={diffCellClass(diff.type, 'px-3 py-2 whitespace-nowrap')}>
                   <span title={TYPE_LABEL[a.type]} aria-label={TYPE_LABEL[a.type]}>
-                    <NodeIcon type={a.type} size={15} class="text-dim" />
+                    <NodeIcon type={a.type} size={15} class={diffValueClass(diff.type)} />
                   </span>
                 </td>
-                <td class="px-3 py-2 whitespace-nowrap font-mono text-xs">{a.hasGps ? fmtCoords(a.lat, a.lon) : '—'}</td>
-                <td class="px-3 py-2 whitespace-nowrap text-xs">
+                <td class={diffCellClass(diff.location, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>{a.hasGps ? fmtCoords(a.lat, a.lon) : '—'}</td>
+                <td class={diffCellClass(diff.network, 'px-3 py-2 whitespace-nowrap text-xs')}>
                   {#if a.networkId}
                     <a
                       class="inline-flex hover:opacity-80"
@@ -1553,14 +1949,16 @@
                       onclick={(event) => event.stopPropagation()}
                       rel="noreferrer"
                     >
-                      <NetworkPill id={a.networkId} {catalog} />
+                      <span class={diff.network ? '' : 'opacity-60'}>
+                        <NetworkPill id={a.networkId} {catalog} />
+                      </span>
                     </a>
                   {:else}—{/if}
                 </td>
-                <td class="px-3 py-2 whitespace-nowrap text-xs">
+                <td class={diffCellClass(diff.analyzer, 'px-3 py-2 whitespace-nowrap text-xs')}>
                   {#if groupAnalyzerPacketUrl(group)}
                     <a
-                      class="text-accent2 hover:underline"
+                      class={diffValueClass(diff.analyzer, 'hover:underline')}
                       href={groupAnalyzerPacketUrl(group)}
                       onclick={(event) => event.stopPropagation()}
                       target="_blank"
@@ -1569,34 +1967,36 @@
                       {analyzerGroupLabel(group)}
                     </a>
                   {:else}
-                    <span class="text-dim">{analyzerGroupLabel(group)}</span>
+                    <span class={diffValueClass(diff.analyzer)}>{analyzerGroupLabel(group)}</span>
                   {/if}
                 </td>
-                <td class="px-3 py-2 whitespace-nowrap text-xs text-dim">{observerLabel(group)}</td>
+                <td class={diffCellClass(diff.observer, 'px-3 py-2 whitespace-nowrap text-xs')}>{observerLabel(group)}</td>
               </tr>
               {#if canExpand && expanded}
                 {#each group.adverts as detail, detailIndex (`${group.key}-${detailIndex}`)}
+                  {@const prevDetail = detailIndex === 0 ? a : group.adverts[detailIndex - 1]}
+                  {@const detailDiff = advertDiff(detail, prevDetail)}
                   <tr
                     class="cursor-pointer bg-elev/40 hover:bg-elev"
                     onclick={() => openAdvertDetails(detail, group)}
                   >
-                    <td class="px-3 py-2 whitespace-nowrap text-xs text-dim" title={fmtTime(detail.at)}>
+                    <td class={diffCellClass(detailDiff.received, 'px-3 py-2 whitespace-nowrap text-xs')} title={fmtTime(detail.at)}>
                       <span class="pl-5">{fmtAgo(detail.at)}</span>
                     </td>
-                    <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-muted">
+                    <td class={diffCellClass(detailDiff.hash, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>
                       {group.hash ? shortHash(group.hash) : '—'}
                     </td>
-                    <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-dim">{fmtTime(detail.advertTime)}</td>
-                    <td class="px-3 py-2 max-w-[16rem] truncate text-dim" title={detail.name}>{detail.name || '—'}</td>
-                    <td class="px-3 py-2 whitespace-nowrap">
+                    <td class={diffCellClass(detailDiff.advertTime, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>{fmtTime(detail.advertTime)}</td>
+                    <td class={diffCellClass(detailDiff.name, 'px-3 py-2 max-w-[16rem] truncate')} title={detail.name}>{detail.name || '—'}</td>
+                    <td class={diffCellClass(detailDiff.type, 'px-3 py-2 whitespace-nowrap')}>
                       <span title={TYPE_LABEL[detail.type]} aria-label={TYPE_LABEL[detail.type]}>
-                        <NodeIcon type={detail.type} size={14} class="text-muted" />
+                        <NodeIcon type={detail.type} size={14} class={diffValueClass(detailDiff.type)} />
                       </span>
                     </td>
-                    <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-dim">
+                    <td class={diffCellClass(detailDiff.location, 'px-3 py-2 whitespace-nowrap font-mono text-xs')}>
                       {detail.hasGps ? fmtCoords(detail.lat, detail.lon) : '—'}
                     </td>
-                    <td class="px-3 py-2 whitespace-nowrap text-xs text-dim">
+                    <td class={diffCellClass(detailDiff.network, 'px-3 py-2 whitespace-nowrap text-xs')}>
                       {#if detail.networkId}
                         <a
                           class="inline-flex hover:opacity-80"
@@ -1604,14 +2004,16 @@
                           onclick={(event) => event.stopPropagation()}
                           rel="noreferrer"
                         >
-                          <NetworkPill id={detail.networkId} {catalog} />
+                          <span class={detailDiff.network ? '' : 'opacity-60'}>
+                            <NetworkPill id={detail.networkId} {catalog} />
+                          </span>
                         </a>
                       {:else}—{/if}
                     </td>
-                    <td class="px-3 py-2 whitespace-nowrap text-xs">
+                    <td class={diffCellClass(detailDiff.analyzer, 'px-3 py-2 whitespace-nowrap text-xs')}>
                       {#if analyzerPacketUrl(detail)}
                         <a
-                          class="text-accent2 hover:underline"
+                          class={diffValueClass(detailDiff.analyzer, 'hover:underline')}
                           href={analyzerPacketUrl(detail)}
                           onclick={(event) => event.stopPropagation()}
                           target="_blank"
@@ -1620,16 +2022,16 @@
                           {analyzerName(detail)}
                         </a>
                       {:else}
-                        <span class="text-dim">{analyzerName(detail)}</span>
+                        <span class={diffValueClass(detailDiff.analyzer)}>{analyzerName(detail)}</span>
                       {/if}
                     </td>
-                    <td class="px-3 py-2 whitespace-nowrap text-xs text-dim">
+                    <td class={diffCellClass(detailDiff.observer, 'px-3 py-2 whitespace-nowrap text-xs')}>
                       <div>{detail.observerName || '—'}</div>
                       {#if detail.observerId}
                         {@const observerUrl = analyzerObserverUrl(detail)}
                         {#if observerUrl}
                           <a
-                            class="font-mono text-[11px] text-accent2 hover:underline"
+                            class={diffValueClass(detailDiff.observer, 'font-mono text-[11px] hover:underline')}
                             href={observerUrl}
                             onclick={(event) => event.stopPropagation()}
                             target="_blank"
@@ -1638,7 +2040,7 @@
                             {shortObserverId(detail.observerId)}
                           </a>
                         {:else}
-                          <div class="font-mono text-[11px] text-muted">{shortObserverId(detail.observerId)}</div>
+                          <div class={diffValueClass(detailDiff.observer, 'font-mono text-[11px]')}>{shortObserverId(detail.observerId)}</div>
                         {/if}
                       {/if}
                     </td>
@@ -1666,8 +2068,9 @@
     <!-- Map publishes (captured map.meshcore.io directory snapshots) -->
     {#if mapPublishes.length}
       <section id="map-publishes" class="mt-8 scroll-mt-6">
-        <h2 class="mb-2 text-xs uppercase tracking-wide text-muted">
+        <h2 class="mb-2 inline-flex items-center gap-1 text-xs uppercase tracking-wide text-muted">
           <span class="font-semibold">Map publishes</span>
+          {@render helpTip('Captured snapshots of this node in the public map.meshcore.io directory. These are useful for unsigned map-only entries and for comparing map data with signed adverts.', 'history', 'https://map.meshcore.io', 'Open map directory')}
           <span> on </span>
           <a
             href={MAP_SITE}
@@ -1681,19 +2084,22 @@
           <a href={MAP_SITE} target="_blank" rel="noreferrer" class="text-accent2 hover:underline">map.meshcore.io</a>
           directory we’ve captured over time — newest first.
         </p>
-        <div class="overflow-x-auto rounded-xl border border-edge">
-          <table class="w-full text-sm">
+        <div class="overflow-hidden rounded-xl border border-edge">
+          <table class="w-full table-fixed text-sm">
+            <colgroup>
+              <col class="w-[6.5rem]" />
+              <col />
+              <col class="w-14" />
+              <col class="w-[11rem]" />
+              <col class="w-[21rem]" />
+            </colgroup>
             <thead class="bg-elev2 text-muted text-xs">
               <tr>
-                <th class="text-left font-medium px-3 py-2">Captured</th>
-                <th class="text-left font-medium px-3 py-2">Name</th>
-                <th class="text-left font-medium px-3 py-2 w-12">Type</th>
-                <th class="text-left font-medium px-3 py-2">Location</th>
-                <th class="text-left font-medium px-3 py-2">Last advert</th>
-                <th class="text-left font-medium px-3 py-2">Source</th>
-                <th class="text-left font-medium px-3 py-2">Inserted</th>
-                <th class="text-left font-medium px-3 py-2">Updated</th>
-                <th class="text-left font-medium px-3 py-2">Submitted by</th>
+                <th class="text-left font-medium px-3 py-2">{@render labelHelp('Captured', 'When nodes.meshcore.ninja captured this map directory snapshot.', 'history')}</th>
+                <th class="text-left font-medium px-3 py-2">{@render labelHelp('Name', 'Node name stored in the map directory snapshot.')}</th>
+                <th class="text-left font-medium px-3 py-2 w-12">{@render labelHelp('Type', 'Node role stored in the map directory snapshot.')}</th>
+                <th class="text-left font-medium px-3 py-2">{@render labelHelp('Location', 'Coordinates stored in the map directory snapshot.')}</th>
+                <th class="text-left font-medium px-3 py-2">{@render labelHelp('Map details', 'Source, insert/update timestamps, submitter, and reported last advert are available here and in the row details modal.')}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-edge">
@@ -1714,18 +2120,18 @@
                   <td class="px-3 py-2 whitespace-nowrap font-mono text-xs">
                     {pub.hasGps ? fmtCoords(pub.advLat, pub.advLon) : '—'}
                   </td>
-                  <td class="px-3 py-2 whitespace-nowrap font-mono text-xs">
-                    {pub.lastAdvertAt ? fmtTime(pub.lastAdvertAt) : '—'}
-                  </td>
-                  <td class="px-3 py-2 whitespace-nowrap text-xs text-dim">{pub.source || '—'}</td>
-                  <td class="px-3 py-2 whitespace-nowrap font-mono text-xs" title={pub.insertedDate}>
-                    {fmtPublishDate(pub.insertedDate)}
-                  </td>
-                  <td class="px-3 py-2 whitespace-nowrap font-mono text-xs" title={pub.updatedDate}>
-                    {fmtPublishDate(pub.updatedDate)}
-                  </td>
-                  <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-dim" title={pub.updatedBy || pub.insertedBy}>
-                    {pub.updatedBy || pub.insertedBy ? shortKey8(pub.updatedBy || pub.insertedBy) : '—'}
+                  <td class="px-3 py-2 text-xs">
+                    <div class="flex min-w-0 items-center gap-2 whitespace-nowrap">
+                      <span class="truncate text-dim" title={pub.source || ''}>{pub.source || '—'}</span>
+                      <span class="font-mono text-muted" title={pub.updatedDate || pub.insertedDate}>
+                        {fmtPublishDate(pub.updatedDate || pub.insertedDate)}
+                      </span>
+                      {#if pub.updatedBy || pub.insertedBy}
+                        <span class="truncate font-mono text-muted" title={pub.updatedBy || pub.insertedBy}>
+                          by {shortKey8(pub.updatedBy || pub.insertedBy)}
+                        </span>
+                      {/if}
+                    </div>
                   </td>
                 </tr>
               {/each}
@@ -2028,6 +2434,7 @@
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+    </Tooltip.Provider>
     {/if}
 </div>
 {/if}
