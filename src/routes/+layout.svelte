@@ -49,6 +49,7 @@
   }
 
   async function refreshNodeOverview() {
+    if (isHome) return;
     nodeOverviewLoading = true;
     try {
       const stats = await directoryStats();
@@ -62,16 +63,29 @@
   }
 
   onMount(() => {
-    const refreshStats = async () => {
-      await refreshNodeOverview();
+    let countTimer;
+    let statsActive = false;
+    const startStats = () => {
+      if (statsActive) return;
+      statsActive = true;
+      refreshNodeOverview();
+      countTimer = setInterval(refreshNodeOverview, 30000);
     };
-    refreshStats();
-    const countTimer = setInterval(refreshStats, 30000);
+    const stopStats = () => {
+      statsActive = false;
+      clearInterval(countTimer);
+    };
+    const stopRouteWatch = page.subscribe(($page) => {
+      const home = $page.url.pathname === base + '/' || $page.url.pathname === base;
+      if (home) stopStats();
+      else startStats();
+    });
     const stopWatch = onNewNode(() => {
       if (totalNodes != null) totalNodes += 1;
     });
     return () => {
-      clearInterval(countTimer);
+      stopStats();
+      stopRouteWatch();
       stopWatch();
     };
   });
