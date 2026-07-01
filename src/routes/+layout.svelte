@@ -5,7 +5,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { Tooltip } from 'bits-ui';
-  import { nodeCount, search } from '$lib/api.js';
+  import { directoryOverviewRows, directoryStats } from '$lib/api.js';
   import { onNewNode } from '$lib/newNodes.js';
   import { focusSearchInput } from '$lib/search.js';
   import ShortcutHint from '$lib/ShortcutHint.svelte';
@@ -48,34 +48,12 @@
     }
   }
 
-  async function countFor(filters) {
-    const d = await search({ filters, limit: 1 });
-    return d.total ?? 0;
-  }
-
   async function refreshNodeOverview() {
     nodeOverviewLoading = true;
     try {
-      const rows = [
-        { group: 'Source', label: 'Signed adverts', filters: [{ key: 'source', value: 'advert' }] },
-        { group: 'Source', label: 'Unsigned map', filters: [{ key: 'source', value: 'map' }] },
-        { group: 'Source', label: 'CoreScope', filters: [{ key: 'source', value: 'corescope' }] },
-        { group: 'Type', label: 'Repeaters', filters: [{ key: 'type', value: 'repeater' }] },
-        { group: 'Type', label: 'Companions', filters: [{ key: 'type', value: 'companion' }] },
-        { group: 'Type', label: 'Rooms', filters: [{ key: 'type', value: 'room' }] },
-        { group: 'Type', label: 'Sensors', filters: [{ key: 'type', value: 'sensor' }] },
-        { group: 'Freshness', label: 'Last 24h', filters: [{ key: 'seen', value: '<24h' }] },
-        { group: 'Freshness', label: 'Last 7d', filters: [{ key: 'seen', value: '<7d' }] },
-        { group: 'Freshness', label: 'Older than 30d', filters: [{ key: 'seen', value: '>30d' }] },
-        { group: 'Data', label: 'With location', filters: [{ key: 'has', value: 'location' }] },
-        { group: 'Data', label: 'With name', filters: [{ key: 'has', value: 'name' }] }
-      ];
-      const counts = await Promise.allSettled(rows.map((row) => countFor(row.filters)));
-      nodeOverview = rows.map((row, i) => ({
-        group: row.group,
-        label: row.label,
-        value: counts[i].status === 'fulfilled' ? counts[i].value : null
-      }));
+      const stats = await directoryStats();
+      totalNodes = stats?.directory?.total ?? stats?.nodes?.total ?? totalNodes;
+      nodeOverview = directoryOverviewRows(stats);
     } catch {
       nodeOverview = [];
     } finally {
@@ -84,19 +62,15 @@
   }
 
   onMount(() => {
-    let stop = false;
-    const refreshCount = async () => {
-      const n = await nodeCount();
-      if (!stop && n != null) totalNodes = n;
+    const refreshStats = async () => {
+      await refreshNodeOverview();
     };
-    refreshCount();
-    refreshNodeOverview();
-    const countTimer = setInterval(refreshCount, 30000);
+    refreshStats();
+    const countTimer = setInterval(refreshStats, 30000);
     const stopWatch = onNewNode(() => {
       if (totalNodes != null) totalNodes += 1;
     });
     return () => {
-      stop = true;
       clearInterval(countTimer);
       stopWatch();
     };

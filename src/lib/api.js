@@ -41,20 +41,37 @@ export function search({ q, types, net, active, filters, limit } = {}, signal) {
 }
 
 /**
- * Total number of nodes in the directory. The search endpoint reports a global
- * `total` for the matching set, so an empty query (limit 1) yields the full
- * directory size cheaply. Failures resolve to null so the caller can hide it.
+ * Directory-wide aggregate stats. This replaces several count-only search
+ * requests with one API call.
  * @param {AbortSignal} [signal]
- * @returns {Promise<number|null>}
+ * @returns {Promise<any|null>}
  */
-export function nodeCount(signal) {
-  return fetch(`${API_BASE}/api/search?limit=1`, { signal })
+export function directoryStats(signal) {
+  return fetch(`${API_BASE}/api/stats`, { signal })
     .then((r) => {
-      if (!r.ok) throw new Error(`count ${r.status}`);
+      if (!r.ok) throw new Error(`stats ${r.status}`);
       return r.json();
     })
-    .then((d) => (Number.isFinite(d?.total) ? d.total : null))
     .catch(() => null);
+}
+
+export function directoryOverviewRows(stats) {
+  const d = stats?.directory;
+  if (!d) return [];
+  return [
+    { group: 'Source', label: 'Signed adverts', value: d.sources?.advert },
+    { group: 'Source', label: 'Unsigned map', value: d.sources?.map },
+    { group: 'Source', label: 'CoreScope', value: d.sources?.corescope },
+    { group: 'Type', label: 'Repeaters', value: d.types?.repeater },
+    { group: 'Type', label: 'Companions', value: d.types?.companion },
+    { group: 'Type', label: 'Rooms', value: d.types?.room },
+    { group: 'Type', label: 'Sensors', value: d.types?.sensor },
+    { group: 'Freshness', label: 'Last 24h', value: d.freshness?.last24h },
+    { group: 'Freshness', label: 'Last 7d', value: d.freshness?.last7d },
+    { group: 'Freshness', label: 'Older than 30d', value: d.freshness?.olderThan30d },
+    { group: 'Data', label: 'With location', value: d.data?.withLocation },
+    { group: 'Data', label: 'With name', value: d.data?.withName }
+  ];
 }
 
 // The API's live advert WebSocket. Each frame is one observed advert carrying a
