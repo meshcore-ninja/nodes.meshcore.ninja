@@ -4,7 +4,15 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { Dialog, Tooltip, Select } from 'bits-ui';
-  import { ChevronRight, ChevronDown, CircleQuestionMark, ShieldAlert, X } from '@lucide/svelte';
+  import {
+    ArrowDownLeft,
+    ArrowUpRight,
+    ChevronRight,
+    ChevronDown,
+    CircleQuestionMark,
+    ShieldAlert,
+    X
+  } from '@lucide/svelte';
   import { MeshCoreDecoder, Utils } from '@michaelhart/meshcore-decoder';
   import {
     nodeDetail,
@@ -275,6 +283,7 @@
   }
 
   const MAX_REAL_LINK_KM = 500;
+  const DEFAULT_ANALYZER_BASE = 'https://analyzer.meshcore.cz';
 
   function linkUnreal(link) {
     const dist = linkDistanceKm(link);
@@ -287,6 +296,63 @@
     if (km == null) return '—';
     if (km < 10) return `${km.toFixed(1)} km`;
     return `${Math.round(km).toLocaleString()} km`;
+  }
+
+  function linkPackets(link, direction) {
+    const key = direction === 'sent' ? 'sentByNode' : 'recvByNode';
+    const fallback = direction === 'sent' ? 0 : link?.packetCount || 0;
+    return Number.isFinite(Number(link?.[key])) ? Number(link[key]) : fallback;
+  }
+
+  function linkSnr(link, direction) {
+    const key = direction === 'sent' ? 'lastSnrSentByNode' : 'lastSnrRecvByNode';
+    if (Number.isFinite(Number(link?.[key]))) return Number(link[key]);
+    const samples = direction === 'sent' ? link?.snrsSentByNode : link?.snrsRecvByNode;
+    const latest = Array.isArray(samples) ? samples.findLast((v) => Number.isFinite(Number(v))) : null;
+    return latest == null ? null : Number(latest);
+  }
+
+  function linkHash(link, direction) {
+    return direction === 'sent' ? link?.lastHashSentByNode : link?.lastHashRecvByNode;
+  }
+
+  function linkAnalyzerBase(link) {
+    for (const networkId of link?.networks ?? []) {
+      const base = cleanUrl(catalog[networkId]?.analyzers?.[0]?.url);
+      if (base) return base;
+    }
+    return DEFAULT_ANALYZER_BASE;
+  }
+
+  function linkPacketUrl(link, direction) {
+    const hash = linkHash(link, direction);
+    if (!hash) return '';
+    return `${linkAnalyzerBase(link)}/#/packets/${encodeURIComponent(hash)}`;
+  }
+
+  function fmtSnr(snr) {
+    if (snr == null) return '—';
+    return `${Number.isInteger(snr) ? snr : snr.toFixed(1)} dB`;
+  }
+
+  function linkSnrSamples(link, direction) {
+    const samples = direction === 'sent' ? link?.snrsSentByNode : link?.snrsRecvByNode;
+    return Array.isArray(samples)
+      ? samples.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+      : [];
+  }
+
+  function snrSamplesText(link, direction) {
+    const samples = linkSnrSamples(link, direction);
+    return samples.length ? samples.map(fmtSnr).join(', ') : '—';
+  }
+
+  function bestLinkSnr(link) {
+    const sent = linkSnr(link, 'sent');
+    const recv = linkSnr(link, 'recv');
+    if (sent == null) return recv;
+    if (recv == null) return sent;
+    return Math.max(sent, recv);
   }
 
   function distanceUnavailableReason(link) {
@@ -509,6 +575,8 @@
       return compareNullableNumber(linkDistanceKm(a), linkDistanceKm(b), direction);
     } else if (key === 'packets') {
       result = (a.packetCount || 0) - (b.packetCount || 0);
+    } else if (key === 'snr') {
+      return compareNullableNumber(bestLinkSnr(a), bestLinkSnr(b), direction);
     } else if (key === 'last') {
       result = (a.lastSeen || 0) - (b.lastSeen || 0);
     }
@@ -1198,6 +1266,127 @@
         {@render helpTip(help, kind, href, linkText)}
       </h2>
     {/snippet}
+    {#snippet directionIcon(direction)}
+      {#if direction === 'sent'}
+        <ArrowUpRight size={13} aria-hidden="true" class="text-accent2" />
+      {:else}
+        <ArrowDownLeft size={13} aria-hidden="true" class="text-accent" />
+      {/if}
+    {/snippet}
+    {#snippet linkMetricTooltip(kind, link)}
+      <Tooltip.Root>
+        <Tooltip.Trigger
+          class="inline-flex flex-col items-end gap-1 outline-none hover:text-ink focus-visible:text-ink focus-visible:ring-1 focus-visible:ring-accent"
+          onclick={(event) => event.stopPropagation()}
+        >
+          <span class="inline-flex items-center justify-end gap-1">
+            {@render directionIcon('sent')}
+            {#if kind === 'packets'}
+              {linkPackets(link, 'sent').toLocaleString()}
+            {:else}
+              {fmtSnr(linkSnr(link, 'sent'))}
+            {/if}
+          </span>
+          <span class="inline-flex items-center justify-end gap-1 text-muted">
+            {@render directionIcon('recv')}
+            {#if kind === 'packets'}
+              {linkPackets(link, 'recv').toLocaleString()}
+            {:else}
+              {fmtSnr(linkSnr(link, 'recv'))}
+            {/if}
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            side="top"
+            sideOffset={6}
+            class="z-50 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-edge bg-elev2 px-3 py-3 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+          >
+            <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              {kind === 'packets' ? 'Packets by direction' : 'SNR by direction'}
+            </div>
+            <table class="w-full border-separate border-spacing-0">
+              <thead class="text-[10px] uppercase tracking-wide text-muted">
+                <tr>
+                  <th class="pb-1 text-left font-medium">Direction</th>
+                  <th class="pb-1 text-right font-medium">{kind === 'packets' ? 'Count' : 'Latest'}</th>
+                  <th class="pb-1 pl-3 text-left font-medium">{kind === 'packets' ? 'Last packet' : 'Samples'}</th>
+                </tr>
+              </thead>
+              <tbody class="align-top font-mono">
+                <tr class="border-t border-edge/70">
+                  <td class="border-t border-edge/70 py-1.5 pr-3 font-sans text-ink">
+                    <span class="inline-flex items-center gap-1.5">
+                      {@render directionIcon('sent')}
+                      Outbound
+                    </span>
+                  </td>
+                  <td class="border-t border-edge/70 py-1.5 text-right">
+                    {#if kind === 'packets'}
+                      {linkPackets(link, 'sent').toLocaleString()}
+                    {:else}
+                      {fmtSnr(linkSnr(link, 'sent'))}
+                    {/if}
+                  </td>
+                  <td class="border-t border-edge/70 py-1.5 pl-3 text-muted break-all">
+                    {#if kind === 'packets'}
+                      {#if linkPacketUrl(link, 'sent')}
+                        <a
+                          class="text-accent2 hover:underline"
+                          href={linkPacketUrl(link, 'sent')}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {linkHash(link, 'sent')}
+                        </a>
+                      {:else}
+                        —
+                      {/if}
+                    {:else}
+                      {snrSamplesText(link, 'sent')}
+                    {/if}
+                  </td>
+                </tr>
+                <tr>
+                  <td class="border-t border-edge/70 py-1.5 pr-3 font-sans text-ink">
+                    <span class="inline-flex items-center gap-1.5">
+                      {@render directionIcon('recv')}
+                      Inbound
+                    </span>
+                  </td>
+                  <td class="border-t border-edge/70 py-1.5 text-right">
+                    {#if kind === 'packets'}
+                      {linkPackets(link, 'recv').toLocaleString()}
+                    {:else}
+                      {fmtSnr(linkSnr(link, 'recv'))}
+                    {/if}
+                  </td>
+                  <td class="border-t border-edge/70 py-1.5 pl-3 text-muted break-all">
+                    {#if kind === 'packets'}
+                      {#if linkPacketUrl(link, 'recv')}
+                        <a
+                          class="text-accent2 hover:underline"
+                          href={linkPacketUrl(link, 'recv')}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {linkHash(link, 'recv')}
+                        </a>
+                      {:else}
+                        —
+                      {/if}
+                    {:else}
+                      {snrSamplesText(link, 'recv')}
+                    {/if}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <Tooltip.Arrow class="text-edge" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    {/snippet}
     {#snippet badgeTip(help, kind = '', href = '', linkText = 'Learn more', side = 'top')}
       <Tooltip.Portal>
         <Tooltip.Content
@@ -1782,7 +1971,15 @@
                         <button class="hover:text-ink" onclick={() => sortNeighbors('packets')}>
                           Packets{sortMark('packets')}
                         </button>
-                        {@render helpTip('Number of packets or link observations attributed to this neighbor relationship.', 'activity')}
+                        {@render helpTip('Directional packet counts: outbound packets sent by this node and inbound packets received from the neighbor.', 'activity')}
+                      </span>
+                    </th>
+                    <th class="text-right font-medium px-3 py-2">
+                      <span class="ml-auto inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('snr')}>
+                          SNR{sortMark('snr')}
+                        </button>
+                        {@render helpTip('Latest signal-to-noise ratio per direction when the API has SNR samples for this link.', 'activity')}
                       </span>
                     </th>
                     <th class="text-left font-medium px-3 py-2">
@@ -1831,7 +2028,12 @@
                           <span class="text-muted" title={distanceUnavailableReason(l)}>No coordinates</span>
                         {/if}
                       </td>
-                      <td class="px-3 py-2 whitespace-nowrap text-right font-mono text-xs">{l.packetCount.toLocaleString()}</td>
+                      <td class="px-3 py-2 whitespace-nowrap text-right font-mono text-xs">
+                        {@render linkMetricTooltip('packets', l)}
+                      </td>
+                      <td class="px-3 py-2 whitespace-nowrap text-right font-mono text-xs">
+                        {@render linkMetricTooltip('snr', l)}
+                      </td>
                       <td class="px-3 py-2 whitespace-nowrap text-xs text-dim" title={fmtTime(l.lastSeen)}>
                         {fmtAgo(l.lastSeen)}
                       </td>
