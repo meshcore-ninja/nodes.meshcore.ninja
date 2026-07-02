@@ -362,33 +362,6 @@
       : linkHash(link, direction);
   }
 
-  const QUALITY_RANK = { unknown: 0, low: 1, mixed: 2, high: 3 };
-
-  function linkQuality(link) {
-    return link?.quality || 'unknown';
-  }
-
-  function qualityRank(link) {
-    return QUALITY_RANK[linkQuality(link)] ?? QUALITY_RANK.unknown;
-  }
-
-  function qualityLabel(quality) {
-    if (quality === 'high') return 'High';
-    if (quality === 'mixed') return 'Mixed';
-    if (quality === 'low') return 'Low';
-    return 'Unknown';
-  }
-
-  function qualityBadgeClass(link) {
-    const quality = linkQuality(link);
-    if (link?.lowConfidence || quality === 'low') {
-      return 'border-warn/45 bg-warn/10 text-warn';
-    }
-    if (quality === 'high') return 'border-ok/35 bg-ok/10 text-ok';
-    if (quality === 'mixed') return 'border-accent2/35 bg-accent2/10 text-accent2';
-    return 'border-edge bg-elev text-muted';
-  }
-
   function fmtSnr(snr) {
     if (snr == null) return '—';
     return `${Number.isInteger(snr) ? snr : snr.toFixed(1)} dB`;
@@ -636,8 +609,6 @@
       result = (a.packetCount || 0) - (b.packetCount || 0);
     } else if (key === 'snr') {
       return compareNullableNumber(bestLinkSnr(a), bestLinkSnr(b), direction);
-    } else if (key === 'quality') {
-      result = qualityRank(a) - qualityRank(b);
     } else if (key === 'last') {
       result = (a.lastSeen || 0) - (b.lastSeen || 0);
     }
@@ -1479,9 +1450,6 @@
                           <div class="max-w-28 truncate" title={networkName(nd.networkId)}>
                             {networkName(nd.networkId)}
                           </div>
-                          <div class={`mt-0.5 inline-flex rounded border px-1 py-px text-[10px] ${qualityBadgeClass(nd)}`}>
-                            {qualityLabel(linkQuality(nd))}
-                          </div>
                         </td>
                         <td class="border-t border-edge/70 py-1.5 text-right">
                           {(nd.packetCount || 0).toLocaleString()}
@@ -1524,78 +1492,6 @@
                               —
                             {/if}
                           </div>
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            {/if}
-            <Tooltip.Arrow class="text-edge" />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    {/snippet}
-    {#snippet qualityTooltip(link)}
-      <Tooltip.Root>
-        <Tooltip.Trigger
-          class={`inline-flex items-center justify-end gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide outline-none hover:border-accent focus-visible:ring-1 focus-visible:ring-accent ${qualityBadgeClass(link)}`}
-          onclick={(event) => event.stopPropagation()}
-        >
-          {qualityLabel(linkQuality(link))}
-          {#if link.lowConfidence}
-            <span aria-label="Low confidence">!</span>
-          {/if}
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content
-            side="top"
-            sideOffset={6}
-            class="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-md border border-edge bg-elev2 px-3 py-3 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
-          >
-            <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Link quality
-            </div>
-            <div class="flex items-center justify-between gap-3 border-t border-edge/70 py-1.5">
-              <span class="text-muted">Overall</span>
-              <span class={`rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${qualityBadgeClass(link)}`}>
-                {qualityLabel(linkQuality(link))}
-              </span>
-            </div>
-            <div class="flex items-center justify-between gap-3 border-t border-edge/70 py-1.5">
-              <span class="text-muted">Weak observations</span>
-              <span class={link.lowConfidence ? 'font-mono text-warn' : 'font-mono text-muted'}>
-                {link.lowConfidenceCount || 0}
-              </span>
-            </div>
-            {#if linkNetworkDetails(link).length}
-              <div class="mt-2 border-t border-edge pt-2">
-                <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  By network
-                </div>
-                <table class="w-full border-separate border-spacing-0">
-                  <thead class="text-[10px] uppercase tracking-wide text-muted">
-                    <tr>
-                      <th class="pb-1 text-left font-medium">Network</th>
-                      <th class="pb-1 text-right font-medium">Quality</th>
-                      <th class="pb-1 text-right font-medium">Weak</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each linkNetworkDetails(link) as nd (nd.networkId)}
-                      <tr>
-                        <td class="border-t border-edge/70 py-1.5 pr-3">
-                          <div class="max-w-32 truncate" title={networkName(nd.networkId)}>
-                            {networkName(nd.networkId)}
-                          </div>
-                        </td>
-                        <td class="border-t border-edge/70 py-1.5 text-right">
-                          <span class={`rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${qualityBadgeClass(nd)}`}>
-                            {qualityLabel(linkQuality(nd))}
-                          </span>
-                        </td>
-                        <td class={nd.lowConfidence ? 'border-t border-edge/70 py-1.5 text-right font-mono text-warn' : 'border-t border-edge/70 py-1.5 text-right font-mono text-muted'}>
-                          {nd.lowConfidenceCount || 0}
                         </td>
                       </tr>
                     {/each}
@@ -2189,14 +2085,6 @@
                     </th>
                     <th class="text-right font-medium px-3 py-2">
                       <span class="ml-auto inline-flex items-center gap-1">
-                        <button class="hover:text-ink" onclick={() => sortNeighbors('quality')}>
-                          Quality{sortMark('quality')}
-                        </button>
-                        {@render helpTip('Evidence quality for this link. Low confidence marks weak observations, currently mainly 1-byte path hashes.', 'links')}
-                      </span>
-                    </th>
-                    <th class="text-right font-medium px-3 py-2">
-                      <span class="ml-auto inline-flex items-center gap-1">
                         <button class="hover:text-ink" onclick={() => sortNeighbors('packets')}>
                           Packets{sortMark('packets')}
                         </button>
@@ -2256,9 +2144,6 @@
                         {:else}
                           <span class="text-muted" title={distanceUnavailableReason(l)}>No coordinates</span>
                         {/if}
-                      </td>
-                      <td class="px-3 py-2 whitespace-nowrap text-right">
-                        {@render qualityTooltip(l)}
                       </td>
                       <td class="px-3 py-2 whitespace-nowrap text-right font-mono text-xs">
                         {@render linkMetricTooltip('packets', l)}
