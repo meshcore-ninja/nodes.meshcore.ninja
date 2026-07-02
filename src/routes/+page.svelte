@@ -5,7 +5,7 @@
 <script>
   import { onMount } from 'svelte';
   import { Command, Tooltip } from 'bits-ui';
-  import { LoaderCircle, LocateFixed, Search as SearchIcon, ShieldAlert, X } from '@lucide/svelte';
+  import { LoaderCircle, LocateFixed, RadioTower, Search as SearchIcon, ShieldAlert, X } from '@lucide/svelte';
   import { base } from '$app/paths';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
@@ -86,6 +86,14 @@
     { key: 'near', label: 'Near', placeholder: '50.0755,14.4378' },
     { key: 'sort', label: 'Sort', values: [{ value: 'recent', label: 'Recent' }, { value: 'name', label: 'Name' }, { value: 'distance', label: 'Distance' }] }
   ];
+
+  // A `^<hex>` query (min 2 hex chars) means "match nodes whose pubkey starts
+  // with <hex>" — a pubkey-prefix search, not the default name substring search.
+  const PREFIX_QUERY_RE = /^\^([0-9a-f]{2,})$/i;
+  function prefixHex(query) {
+    const m = PREFIX_QUERY_RE.exec((query ?? '').trim());
+    return m ? m[1].toLowerCase() : null;
+  }
 
   function parseFilters(sp) {
     const out = [];
@@ -241,6 +249,9 @@
   let selectedValue = $state(initialCachedSearch?.results?.[0]?.pubkey ?? '');
   let searchComputeMs = $state(initialCachedSearch?.computeMs ?? null);
   let searchApiMs = $state(initialCachedSearch?.apiMs ?? null);
+  // The pubkey-prefix hex the current results were matched on (from a `^<hex>`
+  // query), or '' for a normal search. Drives the colored-prefix result display.
+  let resultPrefix = $state(initialCachedSearch?.prefix ?? '');
 
   let inflight; // AbortController of the current request
   let searchSeq = 0;
@@ -395,6 +406,7 @@
     selectedValue = results[0]?.pubkey ?? '';
     searchComputeMs = lastSearchSnapshot.computeMs;
     searchApiMs = lastSearchSnapshot.apiMs;
+    resultPrefix = lastSearchSnapshot.prefix ?? '';
     completedQuery = snap.q;
     completedFiltersKey = snap.filtersKey;
     return true;
@@ -410,7 +422,8 @@
       total,
       capped,
       computeMs: searchComputeMs,
-      apiMs: searchApiMs
+      apiMs: searchApiMs,
+      prefix: resultPrefix
     };
   }
 
@@ -429,6 +442,7 @@
       completedFiltersKey = '';
       searchComputeMs = null;
       searchApiMs = null;
+      resultPrefix = '';
       return [];
     }
     const seq = ++searchSeq;
@@ -447,6 +461,7 @@
       capped = !!d.capped;
       searchComputeMs = Number.isFinite(d.computeMs) ? d.computeMs : null;
       searchApiMs = Number.isFinite(d.apiMs) ? d.apiMs : null;
+      resultPrefix = prefixHex(snap.q) ?? '';
       selectedValue = results[0]?.pubkey ?? '';
       completedQuery = snap.q;
       completedFiltersKey = snap.filtersKey;
@@ -461,6 +476,7 @@
         completedFiltersKey = '';
         searchComputeMs = null;
         searchApiMs = null;
+        resultPrefix = '';
       }
       return [];
     } finally {
@@ -1083,6 +1099,18 @@
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center gap-1.5">
                     <span class="truncate font-medium">{n.name || '(unnamed)'}</span>
+                    {#if n.isObserver}
+                      <Tooltip.Root>
+                        <Tooltip.Trigger
+                          class="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/45 bg-accent/10 px-1.5 py-px text-[0.6rem] uppercase tracking-wide text-accent outline-none hover:border-accent/70 hover:bg-accent/15 focus-visible:ring-1 focus-visible:ring-accent"
+                          onclick={(event) => event.preventDefault()}
+                        >
+                          <RadioTower size={10} aria-hidden="true" />
+                          Observer
+                        </Tooltip.Trigger>
+                        {@render badgeTooltip('Observer node: also reports the packets it hears back to our analyzers.')}
+                      </Tooltip.Root>
+                    {/if}
                     {#if n.source === 'map'}
                       <Tooltip.Root>
                         <Tooltip.Trigger
@@ -1107,7 +1135,13 @@
                       </Tooltip.Root>
                     {/if}
                   </span>
-                  <span class="block truncate text-xs text-muted font-mono">{shortKey(n.pubkey)}</span>
+                  {#if resultPrefix}
+                    <span class="block truncate text-xs font-mono" title={n.pubkey}>
+                      <span class="text-accent">{n.pubkey.slice(0, resultPrefix.length)}</span><span class="text-muted">{n.pubkey.slice(resultPrefix.length, 6)}</span>
+                    </span>
+                  {:else}
+                    <span class="block truncate text-xs text-muted font-mono">{shortKey(n.pubkey)}</span>
+                  {/if}
                   {#if insights.length}
                     <span class="mt-1 flex flex-wrap items-center gap-1.5">
                       {#each insights as item (item.key)}

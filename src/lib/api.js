@@ -10,7 +10,8 @@ export const API_BASE = (import.meta.env?.VITE_API_BASE || 'https://api.meshcore
 /**
  * Search the node directory. Includes nodes without GPS, unlike the map.
  * @param {object} p
- * @param {string} [p.q] name substring (case-insensitive) or pubkey hex prefix
+ * @param {string} [p.q] name substring (case-insensitive) or pubkey hex prefix;
+ *   a `^<hex>` value (min 2 hex chars) restricts to pubkey-prefix matches only
  * @param {number[]} [p.types] node types: 1=chat 2=repeater 3=room 4=sensor
  * @param {string} [p.net] restrict to a network id
  * @param {{key:string,value:string,radiusKm?:number}[]} [p.filters] structured search filters

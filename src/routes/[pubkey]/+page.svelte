@@ -10,11 +10,13 @@
     ChevronRight,
     ChevronDown,
     CircleQuestionMark,
+    RadioTower,
     ShieldAlert,
     X
   } from '@lucide/svelte';
   import { MeshCoreDecoder, Utils } from '@michaelhart/meshcore-decoder';
   import {
+    API_BASE,
     nodeDetail,
     nodeAdverts,
     nodeLinks,
@@ -36,6 +38,8 @@
 
   const pubkey = $derived($page.params.pubkey);
   const validKey = $derived(/^[0-9a-f]{64}$/i.test(pubkey));
+  // The raw API record backing this page — linked in the footer as the source.
+  const jsonSource = $derived(`${API_BASE}/api/nodes/${encodeURIComponent(pubkey)}`);
 
   let node = $state(null);
   let notFound = $state(false);
@@ -1793,6 +1797,49 @@
           {/if}
         </section>
 
+        {#if node.isObserver && node.observer}
+          <section>
+            <div class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              {@render sectionTitle('Observer', 'This node also reports the packets it hears to our analyzers. These stats summarize its contribution as an observer station.', 'identity')}
+              <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
+                <RadioTower size={13} aria-hidden="true" />
+                Active observer
+              </span>
+            </div>
+            <div class="rounded-xl border border-edge bg-elev p-3">
+              <div class="grid grid-cols-2 gap-2">
+                <div class="rounded-lg bg-bg px-3 py-2">
+                  <div class="text-xs text-muted">{@render labelHelp('Observations', 'Total packets this node has reported to our analyzers as an observer.')}</div>
+                  <div class="mt-0.5 font-mono text-sm font-semibold">{(node.observer.observations ?? 0).toLocaleString()}</div>
+                </div>
+                <div class="rounded-lg bg-bg px-3 py-2">
+                  <div class="text-xs text-muted">{@render labelHelp('Networks', 'Networks this node has reported observations on.')}</div>
+                  <div class="mt-0.5 font-mono text-sm font-semibold">{node.observer.networks?.length ?? 0}</div>
+                </div>
+                <div class="rounded-lg bg-bg px-3 py-2">
+                  <div class="text-xs text-muted">{@render labelHelp('First seen', 'When this node first reported an observation to our analyzers.')}</div>
+                  <div class="mt-0.5 text-sm" title={node.observer.firstSeen ? fmtTime(node.observer.firstSeen) : ''}>
+                    {node.observer.firstSeen ? fmtAgo(node.observer.firstSeen) : '—'}
+                  </div>
+                </div>
+                <div class="rounded-lg bg-bg px-3 py-2">
+                  <div class="text-xs text-muted">{@render labelHelp('Last report', 'Most recent observation this node reported to our analyzers.')}</div>
+                  <div class="mt-0.5 text-sm" title={node.observer.lastSeen ? fmtTime(node.observer.lastSeen) : ''}>
+                    {node.observer.lastSeen ? fmtAgo(node.observer.lastSeen) : '—'}
+                  </div>
+                </div>
+              </div>
+              {#if node.observer.networks?.length}
+                <div class="mt-2 flex flex-wrap items-center gap-1">
+                  {#each node.observer.networks as net (net)}
+                    <NetworkPill id={net} {catalog} />
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </section>
+        {/if}
+
         <AddContactQR {pubkey} name={node.name} type={node.type} />
       </aside>
 
@@ -1838,6 +1885,17 @@
                   <span class="ml-1 sm:ml-1.5">
                     {@render placeLoadingSkeleton()}
                   </span>
+                {/if}
+                {#if node.isObserver}
+                  <Tooltip.Root>
+                    <Tooltip.Trigger
+                      class="inline-flex items-center gap-1 rounded-full border border-accent/45 bg-accent/10 px-2 py-0.5 text-accent outline-none hover:border-accent/70 hover:bg-accent/15 focus-visible:ring-1 focus-visible:ring-accent"
+                    >
+                      <RadioTower size={13} aria-hidden="true" />
+                      Observer
+                    </Tooltip.Trigger>
+                    {@render badgeTip('This node also reports the packets it hears back to our analyzers, acting as an observer station. See the Observer panel for its activity.', 'identity')}
+                  </Tooltip.Root>
                 {/if}
                 {#if mapOnly}
                   <Tooltip.Root>
@@ -2461,6 +2519,17 @@
         </div>
       </section>
     {/if}
+
+    <!-- Raw API record backing this page. -->
+    <footer class="mt-8 border-t border-edge pt-4 text-xs text-muted">
+      Source:
+      <a
+        href={jsonSource}
+        target="_blank"
+        rel="noreferrer"
+        class="font-mono text-accent2 break-all hover:underline"
+      >{jsonSource} ↗</a>
+    </footer>
 
     <Dialog.Root bind:open={packetDialogOpen}>
       <Dialog.Portal>
