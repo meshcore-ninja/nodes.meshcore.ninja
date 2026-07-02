@@ -26,6 +26,7 @@
   } from '$lib/api.js';
   import NodeIcon from '$lib/NodeIcon.svelte';
   import NodeMap from '$lib/NodeMap.svelte';
+  import ErrorState from '$lib/ErrorState.svelte';
   import AddContactQR from '$lib/AddContactQR.svelte';
   import Flag from '$lib/Flag.svelte';
   import NetworkPill from '$lib/NetworkPill.svelte';
@@ -40,6 +41,12 @@
   let notFound = $state(false);
   let error = $state('');
   let loading = $state(true);
+  let reloadToken = $state(0);
+
+  // Re-run the load effect after a failure, without a full page reload.
+  function retry() {
+    reloadToken++;
+  }
 
   // Full advert history, paged from the API (newest first).
   let adverts = $state([]);
@@ -154,9 +161,10 @@
     });
   }
 
-  // Load detail + first history page whenever the pubkey changes.
+  // Load detail + first history page whenever the pubkey changes (or on retry).
   $effect(() => {
     const pk = pubkey;
+    void reloadToken; // re-run when retry() bumps the token
     loading = true;
     error = '';
     notFound = false;
@@ -316,18 +324,69 @@
     return direction === 'sent' ? link?.lastHashSentByNode : link?.lastHashRecvByNode;
   }
 
-  function linkAnalyzerBase(link) {
-    for (const networkId of link?.networks ?? []) {
+  function linkNetworkDetails(link) {
+    return Array.isArray(link?.networkDetails) ? link.networkDetails : [];
+  }
+
+  function linkNetworkIds(link) {
+    const detailIds = linkNetworkDetails(link).map((d) => d.networkId).filter(Boolean);
+    return detailIds.length ? detailIds : link?.networks ?? [];
+  }
+
+  function linkAnalyzerBase(link, networkId = '') {
+    const networkIds = networkId ? [networkId] : linkNetworkIds(link);
+    for (const networkId of networkIds) {
       const base = cleanUrl(catalog[networkId]?.analyzers?.[0]?.url);
       if (base) return base;
     }
     return DEFAULT_ANALYZER_BASE;
   }
 
-  function linkPacketUrl(link, direction) {
-    const hash = linkHash(link, direction);
+  function linkPacketUrl(link, direction, networkId = '') {
+    const detail = networkId ? linkNetworkDetails(link).find((d) => d.networkId === networkId) : null;
+    const hash = detail
+      ? direction === 'sent'
+        ? detail.lastHashSentByNode
+        : detail.lastHashRecvByNode
+      : linkHash(link, direction);
     if (!hash) return '';
-    return `${linkAnalyzerBase(link)}/#/packets/${encodeURIComponent(hash)}`;
+    return `${linkAnalyzerBase(link, networkId)}/#/packets/${encodeURIComponent(hash)}`;
+  }
+
+  function linkPacketHash(link, direction, networkId = '') {
+    const detail = networkId ? linkNetworkDetails(link).find((d) => d.networkId === networkId) : null;
+    return detail
+      ? direction === 'sent'
+        ? detail.lastHashSentByNode
+        : detail.lastHashRecvByNode
+      : linkHash(link, direction);
+  }
+
+  const QUALITY_RANK = { unknown: 0, low: 1, mixed: 2, high: 3 };
+
+  function linkQuality(link) {
+    return link?.quality || 'unknown';
+  }
+
+  function qualityRank(link) {
+    return QUALITY_RANK[linkQuality(link)] ?? QUALITY_RANK.unknown;
+  }
+
+  function qualityLabel(quality) {
+    if (quality === 'high') return 'High';
+    if (quality === 'mixed') return 'Mixed';
+    if (quality === 'low') return 'Low';
+    return 'Unknown';
+  }
+
+  function qualityBadgeClass(link) {
+    const quality = linkQuality(link);
+    if (link?.lowConfidence || quality === 'low') {
+      return 'border-warn/45 bg-warn/10 text-warn';
+    }
+    if (quality === 'high') return 'border-ok/35 bg-ok/10 text-ok';
+    if (quality === 'mixed') return 'border-accent2/35 bg-accent2/10 text-accent2';
+    return 'border-edge bg-elev text-muted';
   }
 
   function fmtSnr(snr) {
@@ -577,6 +636,8 @@
       result = (a.packetCount || 0) - (b.packetCount || 0);
     } else if (key === 'snr') {
       return compareNullableNumber(bestLinkSnr(a), bestLinkSnr(b), direction);
+    } else if (key === 'quality') {
+      result = qualityRank(a) - qualityRank(b);
     } else if (key === 'last') {
       result = (a.lastSeen || 0) - (b.lastSeen || 0);
     }
@@ -1135,19 +1196,32 @@
       <span class="text-sm">Loading node…</span>
     </div>
   </div>
+{:else if notFound}
+  {#if validKey}
+    <ErrorState
+      kind="notfound"
+      title="Node not found"
+      message="No node with this public key has been observed yet."
+      detail={pubkey}
+    />
+  {:else}
+    <ErrorState
+      kind="notfound"
+      title="Invalid node key"
+      message="A node key is a 64-character hex string. This link doesn't look like one."
+      detail={pubkey}
+    />
+  {/if}
+{:else if error}
+  <ErrorState
+    kind="offline"
+    title="Couldn’t load this node"
+    message="The directory API didn’t respond. It may be temporarily down — check your connection and try again."
+    onRetry={retry}
+  />
 {:else}
 <div class="mx-auto max-w-6xl w-full min-w-0 px-4 py-6">
-    {#if notFound}
-    <div class="mt-8">
-      <h1 class="text-xl font-semibold">Node not found</h1>
-      <p class="text-dim mt-2 text-sm">
-        No node with this public key has been observed yet.
-      </p>
-      <p class="font-mono text-xs text-muted mt-2 break-all">{pubkey}</p>
-    </div>
-  {:else if error}
-    <p class="text-bad mt-8">{error}</p>
-  {:else if node}
+    {#if node}
     {#snippet placeLoadingSkeleton()}
       <span class="inline-flex items-center gap-1.5" role="status" aria-label="Loading location">
         <span class="h-3 w-4 shrink-0 animate-pulse rounded-sm bg-edge"></span>
@@ -1334,10 +1408,11 @@
                         <a
                           class="text-accent2 hover:underline"
                           href={linkPacketUrl(link, 'sent')}
+                          title={linkPacketHash(link, 'sent')}
                           target="_blank"
                           rel="noreferrer"
                         >
-                          {linkHash(link, 'sent')}
+                          {shortHash(linkPacketHash(link, 'sent'))}
                         </a>
                       {:else}
                         —
@@ -1367,10 +1442,11 @@
                         <a
                           class="text-accent2 hover:underline"
                           href={linkPacketUrl(link, 'recv')}
+                          title={linkPacketHash(link, 'recv')}
                           target="_blank"
                           rel="noreferrer"
                         >
-                          {linkHash(link, 'recv')}
+                          {shortHash(linkPacketHash(link, 'recv'))}
                         </a>
                       {:else}
                         —
@@ -1382,6 +1458,151 @@
                 </tr>
               </tbody>
             </table>
+            {#if kind === 'packets' && linkNetworkDetails(link).length}
+              <div class="mt-3 border-t border-edge pt-2">
+                <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Networks
+                </div>
+                <table class="w-full border-separate border-spacing-0">
+                  <thead class="text-[10px] uppercase tracking-wide text-muted">
+                    <tr>
+                      <th class="pb-1 text-left font-medium">Network</th>
+                      <th class="pb-1 text-right font-medium">Pkts</th>
+                      <th class="pb-1 text-right font-medium">Out/In</th>
+                      <th class="pb-1 pl-3 text-left font-medium">Last packet</th>
+                    </tr>
+                  </thead>
+                  <tbody class="align-top font-mono">
+                    {#each linkNetworkDetails(link) as nd (nd.networkId)}
+                      <tr>
+                        <td class="border-t border-edge/70 py-1.5 pr-3 font-sans text-ink">
+                          <div class="max-w-28 truncate" title={networkName(nd.networkId)}>
+                            {networkName(nd.networkId)}
+                          </div>
+                          <div class={`mt-0.5 inline-flex rounded border px-1 py-px text-[10px] ${qualityBadgeClass(nd)}`}>
+                            {qualityLabel(linkQuality(nd))}
+                          </div>
+                        </td>
+                        <td class="border-t border-edge/70 py-1.5 text-right">
+                          {(nd.packetCount || 0).toLocaleString()}
+                        </td>
+                        <td class="border-t border-edge/70 py-1.5 text-right">
+                          {(nd.sentByNode || 0).toLocaleString()} / {(nd.recvByNode || 0).toLocaleString()}
+                          {#if nd.lowConfidence}
+                            <div class="font-sans text-[10px] text-warn">
+                              weak {nd.lowConfidenceCount || 0}
+                            </div>
+                          {/if}
+                        </td>
+                        <td class="border-t border-edge/70 py-1.5 pl-3 text-muted">
+                          <div class="flex flex-col gap-1">
+                            {#if linkPacketUrl(link, 'sent', nd.networkId)}
+                              <a
+                                class="inline-flex items-center gap-1 text-accent2 hover:underline"
+                                href={linkPacketUrl(link, 'sent', nd.networkId)}
+                                title={linkPacketHash(link, 'sent', nd.networkId)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {@render directionIcon('sent')}
+                                {shortHash(linkPacketHash(link, 'sent', nd.networkId))}
+                              </a>
+                            {/if}
+                            {#if linkPacketUrl(link, 'recv', nd.networkId)}
+                              <a
+                                class="inline-flex items-center gap-1 text-accent2 hover:underline"
+                                href={linkPacketUrl(link, 'recv', nd.networkId)}
+                                title={linkPacketHash(link, 'recv', nd.networkId)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {@render directionIcon('recv')}
+                                {shortHash(linkPacketHash(link, 'recv', nd.networkId))}
+                              </a>
+                            {/if}
+                            {#if !linkPacketUrl(link, 'sent', nd.networkId) && !linkPacketUrl(link, 'recv', nd.networkId)}
+                              —
+                            {/if}
+                          </div>
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+            <Tooltip.Arrow class="text-edge" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    {/snippet}
+    {#snippet qualityTooltip(link)}
+      <Tooltip.Root>
+        <Tooltip.Trigger
+          class={`inline-flex items-center justify-end gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide outline-none hover:border-accent focus-visible:ring-1 focus-visible:ring-accent ${qualityBadgeClass(link)}`}
+          onclick={(event) => event.stopPropagation()}
+        >
+          {qualityLabel(linkQuality(link))}
+          {#if link.lowConfidence}
+            <span aria-label="Low confidence">!</span>
+          {/if}
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            side="top"
+            sideOffset={6}
+            class="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-md border border-edge bg-elev2 px-3 py-3 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+          >
+            <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Link quality
+            </div>
+            <div class="flex items-center justify-between gap-3 border-t border-edge/70 py-1.5">
+              <span class="text-muted">Overall</span>
+              <span class={`rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${qualityBadgeClass(link)}`}>
+                {qualityLabel(linkQuality(link))}
+              </span>
+            </div>
+            <div class="flex items-center justify-between gap-3 border-t border-edge/70 py-1.5">
+              <span class="text-muted">Weak observations</span>
+              <span class={link.lowConfidence ? 'font-mono text-warn' : 'font-mono text-muted'}>
+                {link.lowConfidenceCount || 0}
+              </span>
+            </div>
+            {#if linkNetworkDetails(link).length}
+              <div class="mt-2 border-t border-edge pt-2">
+                <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  By network
+                </div>
+                <table class="w-full border-separate border-spacing-0">
+                  <thead class="text-[10px] uppercase tracking-wide text-muted">
+                    <tr>
+                      <th class="pb-1 text-left font-medium">Network</th>
+                      <th class="pb-1 text-right font-medium">Quality</th>
+                      <th class="pb-1 text-right font-medium">Weak</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each linkNetworkDetails(link) as nd (nd.networkId)}
+                      <tr>
+                        <td class="border-t border-edge/70 py-1.5 pr-3">
+                          <div class="max-w-32 truncate" title={networkName(nd.networkId)}>
+                            {networkName(nd.networkId)}
+                          </div>
+                        </td>
+                        <td class="border-t border-edge/70 py-1.5 text-right">
+                          <span class={`rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${qualityBadgeClass(nd)}`}>
+                            {qualityLabel(linkQuality(nd))}
+                          </span>
+                        </td>
+                        <td class={nd.lowConfidence ? 'border-t border-edge/70 py-1.5 text-right font-mono text-warn' : 'border-t border-edge/70 py-1.5 text-right font-mono text-muted'}>
+                          {nd.lowConfidenceCount || 0}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
             <Tooltip.Arrow class="text-edge" />
           </Tooltip.Content>
         </Tooltip.Portal>
@@ -1968,6 +2189,14 @@
                     </th>
                     <th class="text-right font-medium px-3 py-2">
                       <span class="ml-auto inline-flex items-center gap-1">
+                        <button class="hover:text-ink" onclick={() => sortNeighbors('quality')}>
+                          Quality{sortMark('quality')}
+                        </button>
+                        {@render helpTip('Evidence quality for this link. Low confidence marks weak observations, currently mainly 1-byte path hashes.', 'links')}
+                      </span>
+                    </th>
+                    <th class="text-right font-medium px-3 py-2">
+                      <span class="ml-auto inline-flex items-center gap-1">
                         <button class="hover:text-ink" onclick={() => sortNeighbors('packets')}>
                           Packets{sortMark('packets')}
                         </button>
@@ -2027,6 +2256,9 @@
                         {:else}
                           <span class="text-muted" title={distanceUnavailableReason(l)}>No coordinates</span>
                         {/if}
+                      </td>
+                      <td class="px-3 py-2 whitespace-nowrap text-right">
+                        {@render qualityTooltip(l)}
                       </td>
                       <td class="px-3 py-2 whitespace-nowrap text-right font-mono text-xs">
                         {@render linkMetricTooltip('packets', l)}
